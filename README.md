@@ -19,6 +19,8 @@ A two-player territory game on a grid.
 
 - **Server** - handles multiple simultaneous games and players. Designed so that adding a new game requires minimal changes to the server itself.
 - **Client** - desktop GUI to connect, authenticate, and play
+- **Random bot** - plays random valid moves; used as a training opponent for the RL bot
+- **RL bot** - reinforcement learning agent trained via self-play using MaskablePPO
 
 ---
 
@@ -54,3 +56,10 @@ A two-player territory game on a grid.
 - [x] Play random valid moves against any opponent
 - [x] Multi-game support - handles unlimited simultaneous sessions
 - [x] Graceful shutdown - finishes active games before exiting
+
+### RL bot
+- [ ] Gymnasium environment with action masking
+- [ ] Self-play training with MaskablePPO
+- [ ] Automatic promotion when win rate reaches threshold
+- [ ] Inference bot with multi-game support and graceful shutdown
+- [ ] Experiment with larger networks / hyperparameter tuning
