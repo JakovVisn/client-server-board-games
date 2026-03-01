@@ -30,7 +30,7 @@ A two-player territory game on a grid.
 - [x] Ping/pong keep-alive
 - [x] Virus War game logic
 - [x] Abstract game interface - new games plug in without touching networking
-- [ ] Session-based game management - multiple simultaneous games per connection
+- [x] Session-based game management - multiple simultaneous games per connection
 - [ ] Automatic matchmaking
 - [ ] Enforce max concurrent sessions per account
 - [ ] Preferred opponent - request a specific player by login

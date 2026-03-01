@@ -12,6 +12,7 @@ qt_add_executable(GameServer
     abstract_game.h
     auth_manager.h auth_manager.cpp
     client.h client.cpp
+    game_session.h game_session.cpp
     server_constants.h
     server.h server.cpp
     viruswar_field.h viruswar_field.cpp

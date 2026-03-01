@@ -5,6 +5,8 @@
 #include <QString>
 #include <QTcpSocket>
 
+class GameSession;
+
 class Client : public QObject
 {
     Q_OBJECT
@@ -29,6 +31,9 @@ public:
     [[nodiscard]] QString login() const;
     void setLogin(const QString& login);
 
+    [[nodiscard]] GameSession* session() const;
+    void setSession(GameSession* session);
+
     void updateActivity();
     [[nodiscard]] qint64 millisecondsSinceLastActivity() const;
 
@@ -49,4 +54,5 @@ private:
     Status status_ = Status::Unauthenticated;
     QDateTime lastActivity_ = QDateTime::currentDateTime();
     bool pingPending_ = false;
+    GameSession* session_ = nullptr;
 };

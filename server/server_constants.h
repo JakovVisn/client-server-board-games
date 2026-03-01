@@ -6,6 +6,8 @@ namespace ServerConfig {
     enum class ProtocolVersion : int { V1 = 1 };
     inline constexpr ProtocolVersion PROTOCOL_VERSION = ProtocolVersion::V1;
 
+    inline const QString DEFAULT_GAME_NAME = "viruswar";
+
     inline constexpr quint16 PORT = 1234;
     inline const QHostAddress ADDRESS = QHostAddress::Any;
     inline constexpr int SEARCH_INTERVAL = 3000;

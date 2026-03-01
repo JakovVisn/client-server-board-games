@@ -3,10 +3,12 @@
 #include <QTcpSocket>
 #include "server.h"
 #include "server_constants.h"
+#include "virus_war_game.h"
 
 Server::Server(QObject* parent)
     : QTcpServer(parent), authManager_(AuthConfig::FILE_PATH)
 {
+    gamePrototypes_[ServerConfig::DEFAULT_GAME_NAME] = std::make_unique<VirusWarGame>();
 }
 
 bool Server::start()
@@ -50,6 +52,7 @@ void Server::parseData(const QString& cmd, Client* client)
     qDebug() << client->login() << "←" << cmd;
 
     if (stateAuthorize(cmd, client))    return;
+    if (stateHandleStep(cmd, client))   return;
     if (stateReceivePing(cmd, client))  return;
     if (stateReceivePong(cmd, client))  return;
 
@@ -114,6 +117,26 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     return true;
 }
 
+bool Server::stateHandleStep(const QString& cmd, Client* client)
+{
+    if (client->status() != Client::Status::InGame)
+        return false;
+
+    static const QRegularExpression rx(QStringLiteral(R"(step:(-?\d+):(-?\d+):)"));
+    const auto match = rx.match(cmd);
+    if (!match.hasMatch())
+        return false;
+
+    client->updateActivity();
+    const int x = match.captured(1).toInt();
+    const int y = match.captured(2).toInt();
+
+    if (auto* session = client->session())
+        session->handleMove(client, x, y);
+
+    return true;
+}
+
 bool Server::stateReceivePing(const QString& cmd, Client* client)
 {
     if (cmd != "ping:") return false;
@@ -144,9 +167,21 @@ bool Server::isAlreadyConnected(const QString& login) const
     });
 }
 
+std::unique_ptr<AbstractGame> Server::makeGame() const
+{
+    auto it = gamePrototypes_.find(ServerConfig::DEFAULT_GAME_NAME);
+    if (it == gamePrototypes_.end()) return nullptr;
+    const auto [w, h] = it->second->defaultBoardSize();
+    return it->second->create(w, h);
+}
+
 void Server::timerEvent(QTimerEvent* event)
 {
     Q_UNUSED(event);
+
+    sessions_.remove_if([](const std::unique_ptr<GameSession>& s) {
+        return s->isFinished();
+    });
 
     for (auto it = clients_.begin(); it != clients_.end(); ) {
         Client* client = *it;
@@ -164,8 +199,7 @@ void Server::timerEvent(QTimerEvent* event)
         }
 
         if (client->millisecondsSinceLastActivity() >= ServerConfig::INACTIVE_MAX_MS) {
-            client->setStatus(Client::Status::Disconnected);
-            client->disconnect();
+            disconnectClient(client);
         }
 
         ++it;
@@ -174,6 +208,24 @@ void Server::timerEvent(QTimerEvent* event)
 
 void Server::onClientDisconnected(Client* client)
 {
-    client->setStatus(Client::Status::Disconnected);
     qDebug() << client->login() << "disconnected";
+    disconnectClient(client);
+}
+
+void Server::disconnectClient(Client* client)
+{
+    GameSession* session = client->session();
+    markClientDisconnected(client);
+    if (session)
+        session->handleDisconnect(client);
+}
+
+void Server::markClientDisconnected(Client* client) const
+{
+    if (!client) return;
+    client->setStatus(Client::Status::Disconnected);
+    client->setSession(nullptr);
+    QObject::disconnect(client, nullptr, this, nullptr);
+    if (QTcpSocket* socket = client->socket())
+        socket->disconnectFromHost();
 }

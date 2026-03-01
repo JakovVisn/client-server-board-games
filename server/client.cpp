@@ -40,6 +40,9 @@ qint64 Client::millisecondsSinceLastActivity() const
     return lastActivity_.msecsTo(QDateTime::currentDateTime());
 }
 
+GameSession* Client::session() const { return session_; }
+void Client::setSession(GameSession* session) { session_ = session; }
+
 bool Client::isPingPending() const { return pingPending_; }
 void Client::markPingSent() { pingPending_ = true; }
 
