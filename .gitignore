@@ -55,3 +55,6 @@ compile_commands.json
 
 # IDE
 .idea/
+
+# macOS
+.DS_Store
