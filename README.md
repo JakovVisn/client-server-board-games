@@ -42,7 +42,7 @@ A two-player territory game on a grid.
 - [ ] Turn timer
 
 ### Client
-- [ ] Connect dialog with persistent settings
+- [x] Connect dialog with persistent settings
 - [ ] Board rendering
 - [ ] Move input
 - [ ] Highlight last moves of both players
