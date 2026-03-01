@@ -13,6 +13,7 @@ qt_add_executable(GameServer
     client.h client.cpp
     server_constants.h
     server.h server.cpp
+    viruswar_field.h viruswar_field.cpp
 )
 
 target_link_libraries(GameServer PRIVATE Qt6::Core Qt6::Network)
