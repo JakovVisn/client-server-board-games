@@ -15,6 +15,15 @@ static const QColor kCellColors[] = {
     QColor(130, 35, 35),  // CapturedByOpp (dark red)
 };
 
+// Indexed by NewCell value (0–4); 0 unused
+static const QColor kNewCellColors[] = {
+    QColor(),
+    QColor(140, 200, 255), // MyMove
+    QColor(100, 150, 240), // MyCatch
+    QColor(255, 140, 140), // OppMove
+    QColor(240, 100, 100), // OppCatch
+};
+
 BoardWidget::BoardWidget(QWidget* parent)
     : QWidget(parent)
 {
@@ -83,6 +92,13 @@ void BoardWidget::paintEvent(QPaintEvent*)
             const int idx = static_cast<int>(state_->cell(x, y));
             if (idx > 0)
                 p.fillRect(cr.adjusted(2, 2, -2, -2), kCellColors[idx]);
+
+            const int nidx = static_cast<int>(state_->newCell(x, y));
+            if (nidx > 0) {
+                p.setPen(QPen(kNewCellColors[nidx], 2));
+                p.drawRect(cr.adjusted(1, 1, -1, -1));
+                p.setPen(Qt::NoPen);
+            }
         }
     }
 

@@ -11,6 +11,14 @@ enum class Cell {
     CapturedByOpp = 4,
 };
 
+enum class NewCell {
+    None = 0,
+    MyMove,
+    MyCatch,
+    OppMove,
+    OppCatch,
+};
+
 class GameState
 {
 public:
@@ -26,10 +34,17 @@ public:
     [[nodiscard]] Cell cell(int x, int y) const;
     void setCell(int x, int y, Cell c);
 
+    [[nodiscard]] NewCell newCell(int x, int y) const;
+    void setNewCell(int x, int y, NewCell value);
+    void clearNewCells();
+    void clearMyNewCells();
+    void clearOppNewCells();
+
 private:
     int width_ = 0;
     int height_ = 0;
     QVector<Cell> cells_;
+    QVector<NewCell> newOverlay_;
 
     [[nodiscard]] bool inBounds(int x, int y) const;
 };

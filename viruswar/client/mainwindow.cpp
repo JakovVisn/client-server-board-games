@@ -116,6 +116,7 @@ void MainWindow::setupNetwork()
     connect(network_, &NetworkClient::matchFound, this,
             [this](const QString& opponent, bool) {
         opponent_ = opponent;
+        opponentTurnActive_ = false;
         gameState_.reset(boardWidth_, boardHeight_);
         boardWidget_->update();
         setAppState(AppState::WaitingForTurn);
@@ -123,6 +124,10 @@ void MainWindow::setupNetwork()
 
     connect(network_, &NetworkClient::yourTurn, this,
             [this](const QString& board, int moves) {
+        if (moves == 3) {
+            gameState_.clearMyNewCells();
+            opponentTurnActive_ = false;
+        }
         gameState_.fromString(board);
         movesLeft_ = moves;
         setAppState(AppState::YourTurn);
@@ -132,13 +137,19 @@ void MainWindow::setupNetwork()
             [this](const QString& type, int x, int y) {
         const bool caught = type == "caught";
         gameState_.setCell(x, y, caught ? Cell::CapturedByMe : Cell::Mine);
+        gameState_.setNewCell(x, y, caught ? NewCell::MyCatch : NewCell::MyMove);
         boardWidget_->update();
     });
 
     connect(network_, &NetworkClient::opponentMoved, this,
             [this](const QString& type, int x, int y) {
+        if (!opponentTurnActive_) {
+            gameState_.clearOppNewCells();
+            opponentTurnActive_ = true;
+        }
         const bool caught = type == "caught";
         gameState_.setCell(x, y, caught ? Cell::CapturedByOpp : Cell::Opponent);
+        gameState_.setNewCell(x, y, caught ? NewCell::OppCatch : NewCell::OppMove);
         boardWidget_->update();
         updateStatus();
     });
@@ -212,6 +223,7 @@ void MainWindow::setAppState(AppState state)
         gameState_.reset(boardWidth_, boardHeight_);
         boardWidget_->update();
         opponent_.clear();
+        opponentTurnActive_ = false;
     }
     appState_ = state;
     boardWidget_->setInteractive(state == AppState::YourTurn);

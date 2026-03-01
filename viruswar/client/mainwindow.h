@@ -38,6 +38,7 @@ private:
     int boardHeight_ = 10;
     QString opponent_;
     int movesLeft_ = 0;
+    bool opponentTurnActive_ = false;
 
     // Last connection params
     QString lastHost_     = "127.0.0.1";
