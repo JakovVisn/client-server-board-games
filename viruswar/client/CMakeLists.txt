@@ -9,7 +9,9 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 qt_add_executable(VirusWarClient
     main.cpp
+    boardwidget.h boardwidget.cpp
     connectdialog.h connectdialog.cpp
+    gamestate.h gamestate.cpp
     mainwindow.h mainwindow.cpp
     networkclient.h networkclient.cpp
 )

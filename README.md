@@ -43,8 +43,8 @@ A two-player territory game on a grid.
 
 ### Client
 - [x] Connect dialog with persistent settings
-- [ ] Board rendering
-- [ ] Move input
+- [x] Board rendering
+- [x] Move input
 - [ ] Highlight last moves of both players
 - [ ] In-app log panel
 - [ ] Hand-drawn art style for board and pieces

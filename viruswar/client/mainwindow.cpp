@@ -30,7 +30,7 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle("VirusWar");
-    setMinimumSize(400, 100);
+    setMinimumSize(400, 400);
 
     {
         QSettings s("VirusWar", "Client");
@@ -41,10 +41,24 @@ MainWindow::MainWindow(QWidget* parent)
         lastPref_     = s.value("preferred", lastPref_).toString();
     }
 
+    gameState_.reset(boardWidth_, boardHeight_);
+    boardWidget_ = new BoardWidget(this);
+    boardWidget_->setGameState(&gameState_);
+    setCentralWidget(boardWidget_);
+
     qInstallMessageHandler(messageHandler);
+
     setupToolbar();
     setupStatusBar();
     setupNetwork();
+
+    connect(boardWidget_, &BoardWidget::cellClicked, this, [this](int x, int y) {
+        if (appState_ != AppState::YourTurn) return;
+        network_->sendMove(x, y);
+        boardWidget_->setInteractive(false);
+        appState_ = AppState::WaitingForTurn;
+        updateStatus();
+    });
 }
 
 MainWindow::~MainWindow() = default;
@@ -56,6 +70,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
     network_->disconnectFromServer();
     event->accept();
 }
+
+// ── Setup ────────────────────────────────────────────────────────────────────
 
 void MainWindow::setupToolbar()
 {
@@ -72,8 +88,11 @@ void MainWindow::setupToolbar()
 
 void MainWindow::setupStatusBar()
 {
-    stateLabel_ = new QLabel("Not connected");
+    stateLabel_    = new QLabel("Not connected");
+    gameInfoLabel_ = new QLabel;
+
     statusBar()->addWidget(stateLabel_);
+    statusBar()->addPermanentWidget(gameInfoLabel_);
 }
 
 void MainWindow::setupNetwork()
@@ -88,30 +107,68 @@ void MainWindow::setupNetwork()
         setAppState(AppState::Disconnected);
     });
 
+    connect(network_, &NetworkClient::authSuccess, this,
+            [this](const QString&, int w, int h) {
+        boardWidth_  = w;
+        boardHeight_ = h;
+    });
+
     connect(network_, &NetworkClient::matchFound, this,
-            [this](const QString&, bool) {
-        setAppState(AppState::InGame);
+            [this](const QString& opponent, bool) {
+        opponent_ = opponent;
+        gameState_.reset(boardWidth_, boardHeight_);
+        boardWidget_->update();
+        setAppState(AppState::WaitingForTurn);
+    });
+
+    connect(network_, &NetworkClient::yourTurn, this,
+            [this](const QString& board, int moves) {
+        gameState_.fromString(board);
+        movesLeft_ = moves;
+        setAppState(AppState::YourTurn);
+    });
+
+    connect(network_, &NetworkClient::moveConfirmed, this,
+            [this](const QString& type, int x, int y) {
+        const bool caught = type == "caught";
+        gameState_.setCell(x, y, caught ? Cell::CapturedByMe : Cell::Mine);
+        boardWidget_->update();
+    });
+
+    connect(network_, &NetworkClient::opponentMoved, this,
+            [this](const QString& type, int x, int y) {
+        const bool caught = type == "caught";
+        gameState_.setCell(x, y, caught ? Cell::CapturedByOpp : Cell::Opponent);
+        boardWidget_->update();
+        updateStatus();
+    });
+
+    connect(network_, &NetworkClient::wrongStep, this, [this] {
+        stateLabel_->setText("Invalid move — try again");
     });
 
     connect(network_, &NetworkClient::gameOver, this, [this](bool won) {
+        boardWidget_->setInteractive(false);
         network_->disconnectFromServer();
         QMessageBox::information(this, "Game over", won ? "You win!" : "You lose.");
     });
 
     connect(network_, &NetworkClient::errorOccurred, this, [this](const QString& msg) {
         const QString text = [&] {
-            if (msg == "wronguser:")       return QStringLiteral("Wrong login or password.");
+            if (msg == "wronguser:")        return QStringLiteral("Wrong login or password.");
             if (msg == "alreadyconnected:") return QStringLiteral("Already connected from another session.");
-            if (msg == "badgame:")         return QStringLiteral("Unknown game or invalid board size.");
-            if (msg == "wrongver:")        return QStringLiteral("Protocol version mismatch.");
-            if (msg == "servererror:")     return QStringLiteral("Server error.");
-            if (msg == "wrongcmd:")        return QStringLiteral("Server rejected the command.");
+            if (msg == "badgame:")          return QStringLiteral("Unknown game or invalid board size.");
+            if (msg == "wrongver:")         return QStringLiteral("Protocol version mismatch.");
+            if (msg == "servererror:")      return QStringLiteral("Server error.");
+            if (msg == "wrongcmd:")         return QStringLiteral("Server rejected the command.");
             return msg;
         }();
         QMessageBox::warning(this, "Error", text);
         setAppState(AppState::Disconnected);
     });
 }
+
+// ── Actions ──────────────────────────────────────────────────────────────────
 
 void MainWindow::onConnectClicked()
 {
@@ -147,15 +204,42 @@ void MainWindow::onDisconnectClicked()
     network_->disconnectFromServer();
 }
 
+// ── State & status ───────────────────────────────────────────────────────────
+
 void MainWindow::setAppState(AppState state)
 {
+    if (state == AppState::Disconnected) {
+        gameState_.reset(boardWidth_, boardHeight_);
+        boardWidget_->update();
+        opponent_.clear();
+    }
     appState_ = state;
+    boardWidget_->setInteractive(state == AppState::YourTurn);
     connectAction_->setEnabled(state == AppState::Disconnected);
     disconnectAction_->setEnabled(state != AppState::Disconnected);
+    updateStatus();
+}
 
-    switch (state) {
-    case AppState::Disconnected:    stateLabel_->setText("Not connected");       break;
-    case AppState::WaitingForMatch: stateLabel_->setText("Searching for opponent…"); break;
-    case AppState::InGame:          stateLabel_->setText("In game");              break;
+void MainWindow::updateStatus()
+{
+    switch (appState_) {
+    case AppState::Disconnected:
+        stateLabel_->setText("Not connected");
+        gameInfoLabel_->clear();
+        break;
+    case AppState::WaitingForMatch:
+        stateLabel_->setText("Searching for opponent…");
+        gameInfoLabel_->clear();
+        break;
+    case AppState::WaitingForTurn:
+        stateLabel_->setText("Opponent's turn");
+        gameInfoLabel_->setText(QString("vs %1").arg(opponent_));
+        break;
+    case AppState::YourTurn:
+        stateLabel_->setText(QString("Your turn  ·  %1 move%2 left")
+                                 .arg(movesLeft_)
+                                 .arg(movesLeft_ == 1 ? "" : "s"));
+        gameInfoLabel_->setText(QString("vs %1").arg(opponent_));
+        break;
     }
 }
