@@ -34,7 +34,7 @@ A two-player territory game on a grid.
 - [x] Automatic matchmaking
 - [x] Enforce max concurrent sessions per account
 - [ ] Preferred opponent - request a specific player by login
-- [ ] Configurable game type and board size per session
+- [x] Configurable game type and board size per session
 - [ ] Randomize player side at game start to prevent first-move bias
 - [x] Win/loss statistics
 - [ ] Bot accounts - dedicated bot role with multi-game support

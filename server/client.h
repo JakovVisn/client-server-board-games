@@ -34,6 +34,13 @@ public:
     [[nodiscard]] GameSession* session() const;
     void setSession(GameSession* session);
 
+    [[nodiscard]] QString gameName() const;
+    [[nodiscard]] int boardWidth() const;
+    [[nodiscard]] int boardHeight() const;
+    void setGameName(const QString& name);
+    void setBoardWidth(int w);
+    void setBoardHeight(int h);
+
     void updateActivity();
     [[nodiscard]] qint64 millisecondsSinceLastActivity() const;
 
@@ -52,6 +59,9 @@ private:
     QTcpSocket* socket_;
     QString login_;
     Status status_ = Status::Unauthenticated;
+    QString gameName_;
+    int boardWidth_ = 0;
+    int boardHeight_ = 0;
     QDateTime lastActivity_ = QDateTime::currentDateTime();
     bool pingPending_ = false;
     GameSession* session_ = nullptr;

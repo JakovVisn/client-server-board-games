@@ -34,7 +34,8 @@ private:
     [[nodiscard]] static bool stateReceivePong(const QString& cmd, Client* client);
     [[nodiscard]] static bool checkProtocolVersion(const QString& version);
     [[nodiscard]] bool isAlreadyConnected(const QString& login) const;
-    [[nodiscard]] std::unique_ptr<AbstractGame> makeGame() const;
+    [[nodiscard]] std::unique_ptr<AbstractGame> makeGame(const QString& name, int w, int h) const;
+    [[nodiscard]] static bool sameGame(const Client* a, const Client* b);
     void matchClients();
     void disconnectClient(Client* client);
     void markClientDisconnected(Client* client) const;

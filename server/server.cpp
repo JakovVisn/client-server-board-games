@@ -64,8 +64,9 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     if (client->status() != Client::Status::Unauthenticated)
         return false;
 
+    // Groups: 1=VERSION 2=LOGIN 3=PASSWORD 4=GAMENAME(opt) 5=WIDTH(opt) 6=HEIGHT(opt)
     static const QRegularExpression rx(
-        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4}):)")
+        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+):(\d+))?)?:)")
             .arg(AuthConfig::LOGIN_LENGTH_MIN)
             .arg(AuthConfig::LOGIN_LENGTH_MAX)
             .arg(AuthConfig::PASSWORD_LENGTH_MIN)
@@ -79,6 +80,9 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     const QString version  = match.captured(1);
     const QString login    = match.captured(2);
     const QString password = match.captured(3);
+    const QString gameNameParam = match.captured(4);
+    int w = match.captured(5).toInt();
+    int h = match.captured(6).toInt();
 
     client->setLogin(login);
 
@@ -98,10 +102,37 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
             client->disconnect();
             return true;
         }
+
+        const QString gameName = gameNameParam.isEmpty()
+            ? ServerConfig::DEFAULT_GAME_NAME : gameNameParam;
+        auto it = gamePrototypes_.find(gameName);
+        if (it == gamePrototypes_.end()) {
+            client->send("badgame:");
+            client->disconnect();
+            return true;
+        }
+        AbstractGame* proto = it->second.get();
+
+        if (w == 0 && h == 0) {
+            auto [defW, defH] = proto->defaultBoardSize();
+            w = defW;
+            h = defH;
+        } else if (!proto->isValidBoardSize(w, h)) {
+            client->send("badgame:");
+            client->disconnect();
+            return true;
+        }
+
+        client->setGameName(gameName);
+        client->setBoardWidth(w);
+        client->setBoardHeight(h);
         client->setStatus(Client::Status::Authorized);
-        client->send(QString("mbserver:%1:")
-            .arg(static_cast<int>(ServerConfig::PROTOCOL_VERSION)));
-        qDebug() << login << "authorized";
+        client->send(QString("mbserver:%1:%2:%3:%4:")
+            .arg(static_cast<int>(ServerConfig::PROTOCOL_VERSION))
+            .arg(gameName)
+            .arg(w)
+            .arg(h));
+        qDebug() << login << "authorized for" << gameName << w << "x" << h;
         return true;
     }
 
@@ -167,12 +198,18 @@ bool Server::isAlreadyConnected(const QString& login) const
     });
 }
 
-std::unique_ptr<AbstractGame> Server::makeGame() const
+std::unique_ptr<AbstractGame> Server::makeGame(const QString& name, int w, int h) const
 {
-    auto it = gamePrototypes_.find(ServerConfig::DEFAULT_GAME_NAME);
+    auto it = gamePrototypes_.find(name);
     if (it == gamePrototypes_.end()) return nullptr;
-    const auto [w, h] = it->second->defaultBoardSize();
     return it->second->create(w, h);
+}
+
+bool Server::sameGame(const Client* a, const Client* b)
+{
+    return a->gameName() == b->gameName()
+        && a->boardWidth() == b->boardWidth()
+        && a->boardHeight() == b->boardHeight();
 }
 
 void Server::matchClients()
@@ -183,21 +220,28 @@ void Server::matchClients()
             waiting.push_back(c);
     }
 
-    for (size_t i = 0; i + 1 < waiting.size(); i += 2) {
-        auto game = makeGame();
-        if (!game) continue;
+    for (size_t i = 0; i < waiting.size(); ++i) {
+        if (waiting[i]->status() != Client::Status::Authorized) continue;
+        for (size_t j = i + 1; j < waiting.size(); ++j) {
+            if (waiting[j]->status() != Client::Status::Authorized) continue;
+            if (!sameGame(waiting[i], waiting[j])) continue;
 
-        Client* p0 = waiting[i];
-        Client* p1 = waiting[i + 1];
-        p0->setStatus(Client::Status::InGame);
-        p1->setStatus(Client::Status::InGame);
+            Client* p0 = waiting[i];
+            Client* p1 = waiting[j];
+            auto game = makeGame(p0->gameName(), p0->boardWidth(), p0->boardHeight());
+            if (!game) continue;
 
-        auto session = std::make_unique<GameSession>(std::move(game), p0, p1, &authManager_);
-        session->setOnFinished([this] { matchClients(); });
-        session->start();
-        sessions_.push_back(std::move(session));
+            p0->setStatus(Client::Status::InGame);
+            p1->setStatus(Client::Status::InGame);
 
-        qDebug() << "Game started:" << p0->login() << "vs" << p1->login();
+            auto session = std::make_unique<GameSession>(std::move(game), p0, p1, &authManager_);
+            session->setOnFinished([this] { matchClients(); });
+            session->start();
+            sessions_.push_back(std::move(session));
+
+            qDebug() << "Game started:" << p0->login() << "vs" << p1->login();
+            break;
+        }
     }
 }
 

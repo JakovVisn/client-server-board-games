@@ -43,6 +43,13 @@ qint64 Client::millisecondsSinceLastActivity() const
 GameSession* Client::session() const { return session_; }
 void Client::setSession(GameSession* session) { session_ = session; }
 
+QString Client::gameName() const { return gameName_; }
+int Client::boardWidth() const { return boardWidth_; }
+int Client::boardHeight() const { return boardHeight_; }
+void Client::setGameName(const QString& name) { gameName_ = name; }
+void Client::setBoardWidth(int w) { boardWidth_ = w; }
+void Client::setBoardHeight(int h) { boardHeight_ = h; }
+
 bool Client::isPingPending() const { return pingPending_; }
 void Client::markPingSent() { pingPending_ = true; }
 
