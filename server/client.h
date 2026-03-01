@@ -26,6 +26,9 @@ public:
     [[nodiscard]] Status status() const;
     void setStatus(Status status);
 
+    [[nodiscard]] QString login() const;
+    void setLogin(const QString& login);
+
     void updateActivity();
     [[nodiscard]] qint64 millisecondsSinceLastActivity() const;
 
@@ -42,6 +45,7 @@ private slots:
 
 private:
     QTcpSocket* socket_;
+    QString login_;
     Status status_ = Status::Unauthenticated;
     QDateTime lastActivity_ = QDateTime::currentDateTime();
     bool pingPending_ = false;

@@ -26,7 +26,7 @@ A two-player territory game on a grid.
 
 ### Server
 - [x] TCP server with client connection management
-- [ ] Login/password authentication
+- [x] Login/password authentication
 - [x] Ping/pong keep-alive
 - [ ] Virus War game logic
 - [ ] Abstract game interface - new games plug in without touching networking

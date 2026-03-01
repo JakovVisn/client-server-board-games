@@ -9,6 +9,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network)
 
 qt_add_executable(GameServer
     main.cpp
+    auth_manager.h auth_manager.cpp
     client.h client.cpp
     server_constants.h
     server.h server.cpp

@@ -1,9 +1,11 @@
+#include <algorithm>
+#include <QRegularExpression>
 #include <QTcpSocket>
 #include "server.h"
 #include "server_constants.h"
 
 Server::Server(QObject* parent)
-    : QTcpServer(parent)
+    : QTcpServer(parent), authManager_(AuthConfig::FILE_PATH)
 {
 }
 
@@ -45,12 +47,71 @@ void Server::onClientDataReceived(Client* client, const QString& data)
 
 void Server::parseData(const QString& cmd, Client* client)
 {
-    qDebug() << "←" << cmd;
+    qDebug() << client->login() << "←" << cmd;
 
-    if (stateReceivePing(cmd, client)) return;
-    if (stateReceivePong(cmd, client)) return;
+    if (stateAuthorize(cmd, client))    return;
+    if (stateReceivePing(cmd, client))  return;
+    if (stateReceivePong(cmd, client))  return;
 
     client->send("wrongcmd:");
+}
+
+bool Server::stateAuthorize(const QString& cmd, Client* client)
+{
+    if (client->status() != Client::Status::Unauthenticated)
+        return false;
+
+    static const QRegularExpression rx(
+        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4}):)")
+            .arg(AuthConfig::LOGIN_LENGTH_MIN)
+            .arg(AuthConfig::LOGIN_LENGTH_MAX)
+            .arg(AuthConfig::PASSWORD_LENGTH_MIN)
+            .arg(AuthConfig::PASSWORD_LENGTH_MAX)
+    );
+
+    const auto match = rx.match(cmd);
+    if (!match.hasMatch())
+        return false;
+
+    const QString version  = match.captured(1);
+    const QString login    = match.captured(2);
+    const QString password = match.captured(3);
+
+    client->setLogin(login);
+
+    if (!checkProtocolVersion(version)) {
+        client->send("wrongver:");
+        client->disconnect();
+        return true;
+    }
+
+    AuthManager::Result result = authManager_.verify(login, password);
+    if (result == AuthManager::Result::NotFound)
+        result = authManager_.registerUser(login, password);
+
+    if (result == AuthManager::Result::Authorized) {
+        if (isAlreadyConnected(login)) {
+            client->send("alreadyconnected:");
+            client->disconnect();
+            return true;
+        }
+        client->setStatus(Client::Status::Authorized);
+        client->send(QString("mbserver:%1:")
+            .arg(static_cast<int>(ServerConfig::PROTOCOL_VERSION)));
+        qDebug() << login << "authorized";
+        return true;
+    }
+
+    if (result == AuthManager::Result::WrongPassword) {
+        client->send("wronguser:");
+        client->disconnect();
+        return true;
+    }
+
+    client->send("servererror:");
+    client->disconnect();
+    qWarning() << "Auth error for" << login;
+    return true;
 }
 
 bool Server::stateReceivePing(const QString& cmd, Client* client)
@@ -65,6 +126,22 @@ bool Server::stateReceivePong(const QString& cmd, Client* client)
     if (cmd != "pong:") return false;
     client->updateActivity();
     return true;
+}
+
+bool Server::checkProtocolVersion(const QString& version)
+{
+    bool ok = false;
+    const int v = version.toInt(&ok);
+    return ok && v == static_cast<int>(ServerConfig::PROTOCOL_VERSION);
+}
+
+bool Server::isAlreadyConnected(const QString& login) const
+{
+    return std::any_of(clients_.begin(), clients_.end(), [&login](const Client* c) {
+        return c->login() == login
+            && c->status() != Client::Status::Disconnected
+            && c->status() != Client::Status::Unauthenticated;
+    });
 }
 
 void Server::timerEvent(QTimerEvent* event)
@@ -98,5 +175,5 @@ void Server::timerEvent(QTimerEvent* event)
 void Server::onClientDisconnected(Client* client)
 {
     client->setStatus(Client::Status::Disconnected);
-    qDebug() << "Client disconnected";
+    qDebug() << client->login() << "disconnected";
 }

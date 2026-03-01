@@ -14,7 +14,7 @@ QTcpSocket* Client::socket() const { return socket_; }
 void Client::send(const QString& cmd)
 {
     if (socket_->state() != QAbstractSocket::ConnectedState) return;
-    qDebug() << "→" << cmd;
+    qDebug() << login_ << "→" << cmd;
     socket_->write((cmd + '\n').toUtf8());
 }
 
@@ -25,6 +25,9 @@ void Client::disconnect()
 
 Client::Status Client::status() const { return status_; }
 void Client::setStatus(Status status) { status_ = status; }
+
+QString Client::login() const { return login_; }
+void Client::setLogin(const QString& login) { login_ = login; }
 
 void Client::updateActivity()
 {
