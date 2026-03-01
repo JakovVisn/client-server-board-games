@@ -22,6 +22,7 @@ protected:
 private:
     // UI
     BoardWidget* boardWidget_;
+    QPlainTextEdit* logPanel_;
     QLabel* stateLabel_;
     QLabel* gameInfoLabel_;
     QAction* connectAction_;

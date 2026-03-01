@@ -2,10 +2,12 @@
 #include "connectdialog.h"
 #include <QAction>
 #include <QCloseEvent>
+#include <QFontDatabase>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QSettings>
+#include <QSplitter>
 #include <QStatusBar>
 #include <QTime>
 #include <QToolBar>
@@ -30,7 +32,8 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle("VirusWar");
-    setMinimumSize(400, 400);
+    setMinimumSize(520, 560);
+    resize(560, 600);
 
     {
         QSettings s("VirusWar", "Client");
@@ -44,8 +47,22 @@ MainWindow::MainWindow(QWidget* parent)
     gameState_.reset(boardWidth_, boardHeight_);
     boardWidget_ = new BoardWidget(this);
     boardWidget_->setGameState(&gameState_);
-    setCentralWidget(boardWidget_);
 
+    logPanel_ = new QPlainTextEdit;
+    logPanel_->setReadOnly(true);
+    logPanel_->setMaximumBlockCount(500);
+    logPanel_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    logPanel_->setStyleSheet("background:#111118; color:#8888aa; border:none;");
+
+    auto* splitter = new QSplitter(Qt::Vertical, this);
+    splitter->addWidget(boardWidget_);
+    splitter->addWidget(logPanel_);
+    splitter->setStretchFactor(0, 4);
+    splitter->setStretchFactor(1, 1);
+    splitter->setSizes({440, 120});
+    setCentralWidget(splitter);
+
+    s_logPanel_ = logPanel_;
     qInstallMessageHandler(messageHandler);
 
     setupToolbar();
