@@ -175,6 +175,32 @@ std::unique_ptr<AbstractGame> Server::makeGame() const
     return it->second->create(w, h);
 }
 
+void Server::matchClients()
+{
+    std::vector<Client*> waiting;
+    for (auto* c : clients_) {
+        if (c->status() == Client::Status::Authorized)
+            waiting.push_back(c);
+    }
+
+    for (size_t i = 0; i + 1 < waiting.size(); i += 2) {
+        auto game = makeGame();
+        if (!game) continue;
+
+        Client* p0 = waiting[i];
+        Client* p1 = waiting[i + 1];
+        p0->setStatus(Client::Status::InGame);
+        p1->setStatus(Client::Status::InGame);
+
+        auto session = std::make_unique<GameSession>(std::move(game), p0, p1);
+        session->setOnFinished([this] { matchClients(); });
+        session->start();
+        sessions_.push_back(std::move(session));
+
+        qDebug() << "Game started:" << p0->login() << "vs" << p1->login();
+    }
+}
+
 void Server::timerEvent(QTimerEvent* event)
 {
     Q_UNUSED(event);
@@ -204,6 +230,8 @@ void Server::timerEvent(QTimerEvent* event)
 
         ++it;
     }
+
+    matchClients();
 }
 
 void Server::onClientDisconnected(Client* client)

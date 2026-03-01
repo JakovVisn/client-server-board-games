@@ -31,8 +31,8 @@ A two-player territory game on a grid.
 - [x] Virus War game logic
 - [x] Abstract game interface - new games plug in without touching networking
 - [x] Session-based game management - multiple simultaneous games per connection
-- [ ] Automatic matchmaking
-- [ ] Enforce max concurrent sessions per account
+- [x] Automatic matchmaking
+- [x] Enforce max concurrent sessions per account
 - [ ] Preferred opponent - request a specific player by login
 - [ ] Configurable game type and board size per session
 - [ ] Randomize player side at game start to prevent first-move bias

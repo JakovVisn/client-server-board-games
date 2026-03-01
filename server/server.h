@@ -35,6 +35,7 @@ private:
     [[nodiscard]] static bool checkProtocolVersion(const QString& version);
     [[nodiscard]] bool isAlreadyConnected(const QString& login) const;
     [[nodiscard]] std::unique_ptr<AbstractGame> makeGame() const;
+    void matchClients();
     void disconnectClient(Client* client);
     void markClientDisconnected(Client* client) const;
 
