@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.DS_Store
+.idea/
+.venv/
+models/*.zip
+models-archive/*.zip
+models/tb_logs/
+.env
