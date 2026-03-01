@@ -36,7 +36,9 @@ private:
     [[nodiscard]] bool isAlreadyConnected(const QString& login) const;
     [[nodiscard]] std::unique_ptr<AbstractGame> makeGame(const QString& name, int w, int h) const;
     [[nodiscard]] static bool sameGame(const Client* a, const Client* b);
+    [[nodiscard]] int countActiveSessions(const Client* a, const Client* b) const;
     void matchClients();
+    void startGame(Client* p0, Client* p1);
     void disconnectClient(Client* client);
     void markClientDisconnected(Client* client) const;
 

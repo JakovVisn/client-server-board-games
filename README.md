@@ -33,7 +33,7 @@ A two-player territory game on a grid.
 - [x] Session-based game management - multiple simultaneous games per connection
 - [x] Automatic matchmaking
 - [x] Enforce max concurrent sessions per account
-- [ ] Preferred opponent - request a specific player by login
+- [x] Preferred opponent - request a specific player by login
 - [x] Configurable game type and board size per session
 - [x] Randomize player side at game start to prevent first-move bias
 - [x] Win/loss statistics

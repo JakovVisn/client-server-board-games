@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QMap>
 #include <QObject>
 #include <QString>
 #include <QTcpSocket>
@@ -41,6 +42,9 @@ public:
     void setBoardWidth(int w);
     void setBoardHeight(int h);
 
+    [[nodiscard]] QMap<QString, int> preferredOpponents() const;
+    void setPreferredOpponents(const QMap<QString, int>& prefs);
+
     void updateActivity();
     [[nodiscard]] qint64 millisecondsSinceLastActivity() const;
 
@@ -62,6 +66,7 @@ private:
     QString gameName_;
     int boardWidth_ = 0;
     int boardHeight_ = 0;
+    QMap<QString, int> preferredOpponents_;
     QDateTime lastActivity_ = QDateTime::currentDateTime();
     bool pingPending_ = false;
     GameSession* session_ = nullptr;

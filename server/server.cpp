@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <set>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QTcpSocket>
@@ -65,9 +66,10 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     if (client->status() != Client::Status::Unauthenticated)
         return false;
 
-    // Groups: 1=VERSION 2=LOGIN 3=PASSWORD 4=GAMENAME(opt) 5=WIDTH(opt) 6=HEIGHT(opt)
+    // Groups: 1=VERSION 2=LOGIN 3=PASSWORD 4=GAMENAME(opt) 5=WIDTH(opt) 6=HEIGHT(opt) 7=TARGET(opt)
+    // TARGET: "login" or "login/N" or "login1/N1,login2/N2"
     static const QRegularExpression rx(
-        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+):(\d+))?)?:)")
+        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+):(\d+)(?::([\w/,]+))?)?)?:)")
             .arg(AuthConfig::LOGIN_LENGTH_MIN)
             .arg(AuthConfig::LOGIN_LENGTH_MAX)
             .arg(AuthConfig::PASSWORD_LENGTH_MIN)
@@ -84,8 +86,27 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     const QString gameNameParam = match.captured(4);
     int w = match.captured(5).toInt();
     int h = match.captured(6).toInt();
+    const QString target   = match.captured(7);
 
     client->setLogin(login);
+
+    if (!target.isEmpty()) {
+        QMap<QString, int> prefs;
+        for (const QString& entry : target.split(',')) {
+            const QStringList parts = entry.split('/');
+            const QString name = parts.at(0).trimmed();
+            if (name.isEmpty()) continue;
+            int limit = 1;
+            if (parts.size() >= 2) {
+                bool ok = false;
+                const int n = parts.at(1).toInt(&ok);
+                if (ok && n > 0) limit = n;
+            }
+            prefs[name] = limit;
+        }
+        if (!prefs.isEmpty())
+            client->setPreferredOpponents(prefs);
+    }
 
     if (!checkProtocolVersion(version)) {
         client->send("wrongver:");
@@ -213,6 +234,33 @@ bool Server::sameGame(const Client* a, const Client* b)
         && a->boardHeight() == b->boardHeight();
 }
 
+int Server::countActiveSessions(const Client* a, const Client* b) const
+{
+    int count = 0;
+    for (const auto& session : sessions_)
+        if (!session->isFinished() && session->involvesPlayer(a) && session->involvesPlayer(b))
+            ++count;
+    return count;
+}
+
+void Server::startGame(Client* p0, Client* p1)
+{
+    if (QRandomGenerator::global()->bounded(2))
+        std::swap(p0, p1);
+    auto game = makeGame(p0->gameName(), p0->boardWidth(), p0->boardHeight());
+    if (!game) return;
+
+    p0->setStatus(Client::Status::InGame);
+    p1->setStatus(Client::Status::InGame);
+
+    auto session = std::make_unique<GameSession>(std::move(game), p0, p1, &authManager_);
+    session->setOnFinished([this] { matchClients(); });
+    session->start();
+    sessions_.push_back(std::move(session));
+
+    qDebug() << "Game started:" << p0->login() << "vs" << p1->login();
+}
+
 void Server::matchClients()
 {
     std::vector<Client*> waiting;
@@ -221,28 +269,45 @@ void Server::matchClients()
             waiting.push_back(c);
     }
 
+    // Pass 1: preferred matches (with per-pair concurrency limits)
+    std::set<Client*> matched;
+    for (Client* c : waiting) {
+        if (matched.count(c)) continue;
+        if (c->preferredOpponents().isEmpty()) continue;
+
+        for (auto it = c->preferredOpponents().constBegin();
+             it != c->preferredOpponents().constEnd() && !matched.count(c);
+             ++it) {
+            const QString& target = it.key();
+            const int limit = it.value();
+
+            for (Client* opponent : waiting) {
+                if (opponent == c || matched.count(opponent)) continue;
+                if (opponent->login() != target) continue;
+                if (!sameGame(c, opponent)) continue;
+                if (countActiveSessions(c, opponent) >= limit) continue;
+
+                startGame(c, opponent);
+                matched.insert(c);
+                matched.insert(opponent);
+                break;
+            }
+        }
+    }
+
+    // Pass 2: random matching for those with no preference
     for (size_t i = 0; i < waiting.size(); ++i) {
-        if (waiting[i]->status() != Client::Status::Authorized) continue;
+        Client* a = waiting[i];
+        if (a->status() != Client::Status::Authorized) continue;
+        if (!a->preferredOpponents().isEmpty()) continue;
+
         for (size_t j = i + 1; j < waiting.size(); ++j) {
-            if (waiting[j]->status() != Client::Status::Authorized) continue;
-            if (!sameGame(waiting[i], waiting[j])) continue;
+            Client* b = waiting[j];
+            if (b->status() != Client::Status::Authorized) continue;
+            if (!b->preferredOpponents().isEmpty()) continue;
+            if (!sameGame(a, b)) continue;
 
-            Client* p0 = waiting[i];
-            Client* p1 = waiting[j];
-            if (QRandomGenerator::global()->bounded(2))
-                std::swap(p0, p1);
-            auto game = makeGame(p0->gameName(), p0->boardWidth(), p0->boardHeight());
-            if (!game) continue;
-
-            p0->setStatus(Client::Status::InGame);
-            p1->setStatus(Client::Status::InGame);
-
-            auto session = std::make_unique<GameSession>(std::move(game), p0, p1, &authManager_);
-            session->setOnFinished([this] { matchClients(); });
-            session->start();
-            sessions_.push_back(std::move(session));
-
-            qDebug() << "Game started:" << p0->login() << "vs" << p1->login();
+            startGame(a, b);
             break;
         }
     }
