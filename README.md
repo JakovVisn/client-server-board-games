@@ -58,8 +58,7 @@ A two-player territory game on a grid.
 - [x] Graceful shutdown - finishes active games before exiting
 
 ### RL bot
-- [ ] Gymnasium environment with action masking
+- [x] Gymnasium environment with action masking
 - [ ] Self-play training with MaskablePPO
 - [ ] Automatic promotion when win rate reaches threshold
 - [ ] Inference bot with multi-game support and graceful shutdown
-- [ ] Experiment with larger networks / hyperparameter tuning
