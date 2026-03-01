@@ -61,4 +61,4 @@ A two-player territory game on a grid.
 - [x] Gymnasium environment with action masking
 - [x] Self-play training with MaskablePPO
 - [x] Automatic promotion when win rate reaches threshold
-- [ ] Inference bot with multi-game support and graceful shutdown
+- [x] Inference bot with multi-game support and graceful shutdown
