@@ -36,7 +36,7 @@ A two-player territory game on a grid.
 - [ ] Preferred opponent - request a specific player by login
 - [ ] Configurable game type and board size per session
 - [ ] Randomize player side at game start to prevent first-move bias
-- [ ] Win/loss statistics
+- [x] Win/loss statistics
 - [ ] Bot accounts - dedicated bot role with multi-game support
 - [ ] Protocol versioning
 - [ ] Turn timer

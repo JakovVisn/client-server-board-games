@@ -1,12 +1,15 @@
 #include "game_session.h"
+#include "auth_manager.h"
 #include "client.h"
 
 GameSession::GameSession(std::unique_ptr<AbstractGame> game,
-                         Client* player0, Client* player1)
+                         Client* player0, Client* player1,
+                         AuthManager* authManager)
     : game_(std::move(game))
     , players_{player0, player1}
     , currentPlayerIndex_(0)
     , isFinished_(false)
+    , authManager_(authManager)
 {
 }
 
@@ -77,6 +80,11 @@ Client* GameSession::waitingPlayer() const { return players_[1 - currentPlayerIn
 
 void GameSession::finishGame(Client* winner, Client* loser)
 {
+    if (authManager_) {
+        authManager_->recordWin(winner->login());
+        authManager_->recordLoss(loser->login());
+    }
+
     sendWin(winner);
     sendLose(loser);
 
@@ -94,6 +102,11 @@ void GameSession::finishGame(Client* winner, Client* loser)
 
 void GameSession::finishGameDisconnect(Client* winner, Client* loser)
 {
+    if (authManager_) {
+        authManager_->recordWin(winner->login());
+        authManager_->recordLoss(loser->login());
+    }
+
     sendWin(winner);
     if (loser->status() != Client::Status::Disconnected)
         sendLose(loser);

@@ -6,7 +6,7 @@
 #include "virus_war_game.h"
 
 Server::Server(QObject* parent)
-    : QTcpServer(parent), authManager_(AuthConfig::FILE_PATH)
+    : QTcpServer(parent), authManager_(AuthConfig::FILE_PATH, AuthConfig::STATS_FILE_PATH)
 {
     gamePrototypes_[ServerConfig::DEFAULT_GAME_NAME] = std::make_unique<VirusWarGame>();
 }
@@ -192,7 +192,7 @@ void Server::matchClients()
         p0->setStatus(Client::Status::InGame);
         p1->setStatus(Client::Status::InGame);
 
-        auto session = std::make_unique<GameSession>(std::move(game), p0, p1);
+        auto session = std::make_unique<GameSession>(std::move(game), p0, p1, &authManager_);
         session->setOnFinished([this] { matchClients(); });
         session->start();
         sessions_.push_back(std::move(session));

@@ -17,6 +17,7 @@ namespace ServerConfig {
 
 namespace AuthConfig {
     inline const QString FILE_PATH = "auth.txt";
+    inline const QString STATS_FILE_PATH = "stats.txt";
 
     inline constexpr int LOGIN_LENGTH_MIN    = 3;
     inline constexpr int LOGIN_LENGTH_MAX    = 20;

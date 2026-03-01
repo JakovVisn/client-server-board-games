@@ -4,8 +4,9 @@
 #include <QTextStream>
 #include "auth_manager.h"
 
-AuthManager::AuthManager(QString filePath)
-    : filePath_(std::move(filePath))
+AuthManager::AuthManager(QString authFilePath, QString statsFilePath)
+    : filePath_(std::move(authFilePath))
+    , statsFilePath_(std::move(statsFilePath))
 {
 }
 
@@ -48,4 +49,50 @@ AuthManager::Result AuthManager::registerUser(const QString& login, const QStrin
     QTextStream out(&file);
     out << login << ":" << password << "\n";
     return Result::Authorized;
+}
+
+void AuthManager::recordWin(const QString& login) const
+{
+    updateStats(login, 1, 0);
+}
+
+void AuthManager::recordLoss(const QString& login) const
+{
+    updateStats(login, 0, 1);
+}
+
+void AuthManager::updateStats(const QString& login, int winDelta, int lossDelta) const
+{
+    QFile file(statsFilePath_);
+    QStringList lines;
+    bool found = false;
+
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+        while (!in.atEnd()) {
+            const QString line = in.readLine().trimmed();
+            if (line.isEmpty()) continue;
+            const QStringList parts = line.split(':');
+            if (parts.size() >= 3 && parts.at(0) == login) {
+                const int wins   = parts.at(1).toInt() + winDelta;
+                const int losses = parts.at(2).toInt() + lossDelta;
+                lines << QString("%1:%2:%3").arg(login).arg(wins).arg(losses);
+                found = true;
+            } else {
+                lines << line;
+            }
+        }
+        file.close();
+    }
+
+    if (!found)
+        lines << QString("%1:%2:%3").arg(login).arg(winDelta).arg(lossDelta);
+
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        QTextStream out(&file);
+        for (const QString& l : lines)
+            out << l << "\n";
+    } else {
+        qWarning() << "Cannot write stats file:" << statsFilePath_;
+    }
 }

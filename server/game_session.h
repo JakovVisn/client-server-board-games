@@ -4,13 +4,15 @@
 #include <memory>
 #include "abstract_game.h"
 
+class AuthManager;
 class Client;
 
 class GameSession
 {
 public:
     explicit GameSession(std::unique_ptr<AbstractGame> game,
-                         Client* player0, Client* player1);
+                         Client* player0, Client* player1,
+                         AuthManager* authManager);
 
     void setOnFinished(std::function<void()> cb) { onFinished_ = std::move(cb); }
 
@@ -27,6 +29,7 @@ private:
     Client* players_[2];
     int currentPlayerIndex_;
     bool isFinished_;
+    AuthManager* authManager_;
     std::function<void()> onFinished_;
 
     [[nodiscard]] Client* currentPlayer() const;
