@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QTcpSocket>
 #include "server.h"
@@ -228,6 +229,8 @@ void Server::matchClients()
 
             Client* p0 = waiting[i];
             Client* p1 = waiting[j];
+            if (QRandomGenerator::global()->bounded(2))
+                std::swap(p0, p1);
             auto game = makeGame(p0->gameName(), p0->boardWidth(), p0->boardHeight());
             if (!game) continue;
 
