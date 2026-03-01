@@ -59,6 +59,6 @@ A two-player territory game on a grid.
 
 ### RL bot
 - [x] Gymnasium environment with action masking
-- [ ] Self-play training with MaskablePPO
-- [ ] Automatic promotion when win rate reaches threshold
+- [x] Self-play training with MaskablePPO
+- [x] Automatic promotion when win rate reaches threshold
 - [ ] Inference bot with multi-game support and graceful shutdown
