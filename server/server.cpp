@@ -7,21 +7,21 @@
 #include "server_constants.h"
 #include "virus_war_game.h"
 
-Server::Server(QObject* parent)
-    : QTcpServer(parent), authManager_(AuthConfig::FILE_PATH, AuthConfig::STATS_FILE_PATH)
+Server::Server(const QString& authFile, const QString& statsFile, QObject* parent)
+    : QTcpServer(parent), authManager_(authFile, statsFile)
 {
     gamePrototypes_[ServerConfig::DEFAULT_GAME_NAME] = std::make_unique<VirusWarGame>();
 }
 
-bool Server::start()
+bool Server::start(const QHostAddress& address, quint16 port)
 {
-    if (!listen(ServerConfig::ADDRESS, ServerConfig::PORT)) {
+    if (!listen(address, port)) {
         qCritical() << "Unable to start the server:" << errorString();
         return false;
     }
 
     startTimer(ServerConfig::SEARCH_INTERVAL);
-    qDebug() << "Server started on port" << ServerConfig::PORT;
+    qDebug() << "Server started on" << address.toString() << "port" << port;
     return true;
 }
 

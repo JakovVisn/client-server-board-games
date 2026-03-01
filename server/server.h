@@ -3,6 +3,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <QHostAddress>
 #include <QMap>
 #include <QTcpServer>
 #include "abstract_game.h"
@@ -15,8 +16,9 @@ class Server : public QTcpServer
     Q_OBJECT
 
 public:
-    explicit Server(QObject* parent = nullptr);
-    [[nodiscard]] bool start();
+    explicit Server(const QString& authFile, const QString& statsFile,
+                    QObject* parent = nullptr);
+    [[nodiscard]] bool start(const QHostAddress& address, quint16 port);
 
 protected:
     void incomingConnection(qintptr socketDescriptor) override;
