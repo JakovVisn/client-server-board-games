@@ -9,11 +9,13 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network)
 
 qt_add_executable(GameServer
     main.cpp
+    abstract_game.h
     auth_manager.h auth_manager.cpp
     client.h client.cpp
     server_constants.h
     server.h server.cpp
     viruswar_field.h viruswar_field.cpp
+    virus_war_game.h virus_war_game.cpp
 )
 
 target_link_libraries(GameServer PRIVATE Qt6::Core Qt6::Network)
