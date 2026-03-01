@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPixmap>
 #include <QWidget>
 #include "gamestate.h"
 
@@ -25,7 +26,10 @@ protected:
 private:
     GameState* state_ = nullptr;
     bool interactive_ = false;
+    QPixmap pixmaps_[5];     // indexed by Cell value (0–4)
+    QPixmap newPixmaps_[5];  // indexed by NewCell value (0–4); 0 unused
 
+    void loadPixmaps();
     [[nodiscard]] int cellSize() const;
     [[nodiscard]] QRect boardRect() const;
     [[nodiscard]] QPoint cellAt(const QPoint& pos) const;

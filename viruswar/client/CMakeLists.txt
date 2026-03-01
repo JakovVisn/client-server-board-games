@@ -4,6 +4,7 @@ project(VirusWarClient LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
@@ -14,6 +15,7 @@ qt_add_executable(VirusWarClient
     gamestate.h gamestate.cpp
     mainwindow.h mainwindow.cpp
     networkclient.h networkclient.cpp
+    resources.qrc
 )
 
 target_link_libraries(VirusWarClient PRIVATE

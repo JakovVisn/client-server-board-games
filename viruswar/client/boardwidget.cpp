@@ -6,29 +6,27 @@ static const QColor kBgColor(28, 28, 35);
 static const QColor kCellColor(45, 45, 55);
 static const QColor kGridColor(65, 65, 80);
 
-// Indexed by Cell value (0–4)
-static const QColor kCellColors[] = {
-    QColor(),             // Clear — not used (background shown)
-    QColor(60, 100, 200), // Mine          (blue)
-    QColor(200, 60, 60),  // Opponent      (red)
-    QColor(35, 60, 130),  // CapturedByMe  (dark blue)
-    QColor(130, 35, 35),  // CapturedByOpp (dark red)
-};
-
-// Indexed by NewCell value (0–4); 0 unused
-static const QColor kNewCellColors[] = {
-    QColor(),
-    QColor(140, 200, 255), // MyMove
-    QColor(100, 150, 240), // MyCatch
-    QColor(255, 140, 140), // OppMove
-    QColor(240, 100, 100), // OppCatch
-};
-
 BoardWidget::BoardWidget(QWidget* parent)
     : QWidget(parent)
 {
     setMinimumSize(300, 300);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    loadPixmaps();
+}
+
+void BoardWidget::loadPixmaps()
+{
+    pixmaps_[0] = QPixmap();
+    pixmaps_[1] = QPixmap(":/images/standard_blue.png");
+    pixmaps_[2] = QPixmap(":/images/standard_red.png");
+    pixmaps_[3] = QPixmap(":/images/catch_blue.png");
+    pixmaps_[4] = QPixmap(":/images/catch_red.png");
+
+    newPixmaps_[0] = QPixmap();  // NewCell::None — unused
+    newPixmaps_[1] = QPixmap(":/images/new_blue.png");
+    newPixmaps_[2] = QPixmap(":/images/new_catch_blue.png");
+    newPixmaps_[3] = QPixmap(":/images/new_red.png");
+    newPixmaps_[4] = QPixmap(":/images/new_catch_red.png");
 }
 
 void BoardWidget::setGameState(GameState* state)
@@ -75,6 +73,7 @@ QPoint BoardWidget::cellAt(const QPoint& pos) const
 void BoardWidget::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
     p.fillRect(rect(), kBgColor);
 
     if (!state_ || !state_->isValid()) return;
@@ -90,15 +89,12 @@ void BoardWidget::paintEvent(QPaintEvent*)
             p.fillRect(cr, kCellColor);
 
             const int idx = static_cast<int>(state_->cell(x, y));
-            if (idx > 0)
-                p.fillRect(cr.adjusted(2, 2, -2, -2), kCellColors[idx]);
+            if (idx > 0 && !pixmaps_[idx].isNull())
+                p.drawPixmap(cr.adjusted(2, 2, -2, -2), pixmaps_[idx]);
 
             const int nidx = static_cast<int>(state_->newCell(x, y));
-            if (nidx > 0) {
-                p.setPen(QPen(kNewCellColors[nidx], 2));
-                p.drawRect(cr.adjusted(1, 1, -1, -1));
-                p.setPen(Qt::NoPen);
-            }
+            if (nidx > 0 && !newPixmaps_[nidx].isNull())
+                p.drawPixmap(cr.adjusted(2, 2, -2, -2), newPixmaps_[nidx]);
         }
     }
 
