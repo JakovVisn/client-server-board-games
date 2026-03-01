@@ -49,3 +49,8 @@ A two-player territory game on a grid.
 - [x] In-app log panel
 - [ ] Hand-drawn art style for board and pieces
 - [ ] Dynamic board size configurable per session
+
+### Random bot
+- [x] Play random valid moves against any opponent
+- [x] Multi-game support - handles unlimited simultaneous sessions
+- [x] Graceful shutdown - finishes active games before exiting
