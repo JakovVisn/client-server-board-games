@@ -3,6 +3,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <QMap>
 #include <QTcpServer>
 #include "abstract_game.h"
 #include "auth_manager.h"
@@ -26,10 +27,11 @@ private:
     std::map<QString, std::unique_ptr<AbstractGame>> gamePrototypes_;
     std::list<Client*> clients_;
     std::list<std::unique_ptr<GameSession>> sessions_;
+    QMap<int, GameSession*> sessionById_;
 
     void parseData(const QString& cmd, Client* client);
     [[nodiscard]] bool stateAuthorize(const QString& cmd, Client* client);
-    [[nodiscard]] bool stateHandleStep(const QString& cmd, Client* client);
+    [[nodiscard]] bool stateReceiveSteps(const QString& cmd, Client* client);
     [[nodiscard]] static bool stateReceivePing(const QString& cmd, Client* client);
     [[nodiscard]] static bool stateReceivePong(const QString& cmd, Client* client);
     [[nodiscard]] static bool checkProtocolVersion(const QString& version);
@@ -38,7 +40,9 @@ private:
     [[nodiscard]] static bool sameGame(const Client* a, const Client* b);
     [[nodiscard]] int countActiveSessions(const Client* a, const Client* b) const;
     void matchClients();
-    void startGame(Client* p0, Client* p1);
+    void connectTwoClients(Client* client1, Client* client2);
+    void connectPlayerWithBot(Client* player, Client* bot);
+    void connectTwoBots(Client* bot1, Client* bot2);
     void disconnectClient(Client* client);
     void markClientDisconnected(Client* client) const;
 

@@ -53,6 +53,9 @@ void Client::setBoardHeight(int h) { boardHeight_ = h; }
 QMap<QString, int> Client::preferredOpponents() const { return preferredOpponents_; }
 void Client::setPreferredOpponents(const QMap<QString, int>& prefs) { preferredOpponents_ = prefs; }
 
+bool Client::isBot() const { return isBot_; }
+void Client::setBot(bool bot) { isBot_ = bot; }
+
 bool Client::isPingPending() const { return pingPending_; }
 void Client::markPingSent() { pingPending_ = true; }
 

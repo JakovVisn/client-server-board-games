@@ -53,10 +53,10 @@ void Server::parseData(const QString& cmd, Client* client)
 {
     qDebug() << client->login() << "←" << cmd;
 
-    if (stateAuthorize(cmd, client))    return;
-    if (stateHandleStep(cmd, client))   return;
-    if (stateReceivePing(cmd, client))  return;
-    if (stateReceivePong(cmd, client))  return;
+    if (stateAuthorize(cmd, client))     return;
+    if (stateReceiveSteps(cmd, client))  return;
+    if (stateReceivePing(cmd, client))   return;
+    if (stateReceivePong(cmd, client))   return;
 
     client->send("wrongcmd:");
 }
@@ -145,6 +145,7 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
             return true;
         }
 
+        client->setBot(authManager_.isBot(login));
         client->setGameName(gameName);
         client->setBoardWidth(w);
         client->setBoardHeight(h);
@@ -154,7 +155,8 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
             .arg(gameName)
             .arg(w)
             .arg(h));
-        qDebug() << login << "authorized for" << gameName << w << "x" << h;
+        qDebug() << login << (client->isBot() ? "(bot)" : "") << "authorized for"
+                 << gameName << w << "x" << h;
         return true;
     }
 
@@ -170,23 +172,20 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     return true;
 }
 
-bool Server::stateHandleStep(const QString& cmd, Client* client)
+bool Server::stateReceiveSteps(const QString& cmd, Client* client)
 {
-    if (client->status() != Client::Status::InGame)
-        return false;
-
-    static const QRegularExpression rx(QStringLiteral(R"(step:(-?\d+):(-?\d+):)"));
-    const auto match = rx.match(cmd);
-    if (!match.hasMatch())
-        return false;
+    static const QRegularExpression rx(QStringLiteral(R"(step:(-?\d+):(-?\d+):(\d+):)"));
+    const auto m = rx.match(cmd);
+    if (!m.hasMatch()) return false;
 
     client->updateActivity();
-    const int x = match.captured(1).toInt();
-    const int y = match.captured(2).toInt();
+    const int x = m.captured(1).toInt();
+    const int y = m.captured(2).toInt();
+    const int sessionId = m.captured(3).toInt();
 
-    if (auto* session = client->session())
-        session->handleMove(client, x, y);
-
+    auto it = sessionById_.find(sessionId);
+    if (it == sessionById_.end()) { client->send("wrongcmd:"); return true; }
+    it.value()->handleMove(client, x, y);
     return true;
 }
 
@@ -243,35 +242,76 @@ int Server::countActiveSessions(const Client* a, const Client* b) const
     return count;
 }
 
-void Server::startGame(Client* p0, Client* p1)
+void Server::connectTwoClients(Client* client1, Client* client2)
 {
     if (QRandomGenerator::global()->bounded(2))
-        std::swap(p0, p1);
-    auto game = makeGame(p0->gameName(), p0->boardWidth(), p0->boardHeight());
+        std::swap(client1, client2);
+    auto game = makeGame(client1->gameName(), client1->boardWidth(), client1->boardHeight());
     if (!game) return;
 
-    p0->setStatus(Client::Status::InGame);
-    p1->setStatus(Client::Status::InGame);
+    client1->setStatus(Client::Status::InGame);
+    client2->setStatus(Client::Status::InGame);
 
-    auto session = std::make_unique<GameSession>(std::move(game), p0, p1, &authManager_);
+    auto session = std::make_unique<GameSession>(std::move(game), client1, client2, &authManager_);
+    const int id = session->id();
     session->setOnFinished([this] { matchClients(); });
     session->start();
+    sessionById_[id] = session.get();
     sessions_.push_back(std::move(session));
 
-    qDebug() << "Game started:" << p0->login() << "vs" << p1->login();
+    qDebug() << "Game started:" << client1->login() << "vs" << client2->login();
+}
+
+void Server::connectPlayerWithBot(Client* player, Client* bot)
+{
+    auto game = makeGame(player->gameName(), player->boardWidth(), player->boardHeight());
+    if (!game) return;
+
+    Client* first  = QRandomGenerator::global()->bounded(2) ? bot : player;
+    Client* second = (first == bot) ? player : bot;
+
+    player->setStatus(Client::Status::InGame);
+    // bot stays Authorized — participates in unlimited simultaneous games
+
+    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_);
+    const int id = session->id();
+    session->start();
+    sessionById_[id] = session.get();
+    sessions_.push_back(std::move(session));
+
+    qDebug() << "Game started:" << player->login() << "vs" << bot->login() << "(bot)";
+}
+
+void Server::connectTwoBots(Client* bot1, Client* bot2)
+{
+    if (QRandomGenerator::global()->bounded(2))
+        std::swap(bot1, bot2);
+    auto game = makeGame(bot1->gameName(), bot1->boardWidth(), bot1->boardHeight());
+    if (!game) return;
+
+    // both bots stay Authorized
+
+    auto session = std::make_unique<GameSession>(std::move(game), bot1, bot2, &authManager_);
+    const int id = session->id();
+    session->setOnFinished([this] { matchClients(); });
+    session->start();
+    sessionById_[id] = session.get();
+    sessions_.push_back(std::move(session));
+
+    qDebug() << "Bot game started:" << bot1->login() << "vs" << bot2->login();
 }
 
 void Server::matchClients()
 {
-    std::vector<Client*> waiting;
+    std::vector<Client*> pool;
     for (auto* c : clients_) {
         if (c->status() == Client::Status::Authorized)
-            waiting.push_back(c);
+            pool.push_back(c);
     }
 
     // Pass 1: preferred matches (with per-pair concurrency limits)
     std::set<Client*> matched;
-    for (Client* c : waiting) {
+    for (Client* c : pool) {
         if (matched.count(c)) continue;
         if (c->preferredOpponents().isEmpty()) continue;
 
@@ -281,13 +321,22 @@ void Server::matchClients()
             const QString& target = it.key();
             const int limit = it.value();
 
-            for (Client* opponent : waiting) {
+            for (Client* opponent : pool) {
                 if (opponent == c || matched.count(opponent)) continue;
                 if (opponent->login() != target) continue;
+                // If a bot requests a human who hasn't listed the bot as preferred, skip
+                if (c->isBot() && !opponent->preferredOpponents().isEmpty() &&
+                        !opponent->preferredOpponents().contains(c->login())) continue;
                 if (!sameGame(c, opponent)) continue;
                 if (countActiveSessions(c, opponent) >= limit) continue;
 
-                startGame(c, opponent);
+                if (c->isBot() && opponent->isBot())
+                    connectTwoBots(c, opponent);
+                else if (opponent->isBot())
+                    connectPlayerWithBot(c, opponent);
+                else
+                    connectTwoClients(c, opponent);
+
                 matched.insert(c);
                 matched.insert(opponent);
                 break;
@@ -295,19 +344,19 @@ void Server::matchClients()
         }
     }
 
-    // Pass 2: random matching for those with no preference
-    for (size_t i = 0; i < waiting.size(); ++i) {
-        Client* a = waiting[i];
+    // Pass 2: random human-vs-human for those with no preference
+    for (size_t i = 0; i < pool.size(); ++i) {
+        Client* a = pool[i];
         if (a->status() != Client::Status::Authorized) continue;
-        if (!a->preferredOpponents().isEmpty()) continue;
+        if (a->isBot() || !a->preferredOpponents().isEmpty()) continue;
 
-        for (size_t j = i + 1; j < waiting.size(); ++j) {
-            Client* b = waiting[j];
+        for (size_t j = i + 1; j < pool.size(); ++j) {
+            Client* b = pool[j];
             if (b->status() != Client::Status::Authorized) continue;
-            if (!b->preferredOpponents().isEmpty()) continue;
+            if (b->isBot() || !b->preferredOpponents().isEmpty()) continue;
             if (!sameGame(a, b)) continue;
 
-            startGame(a, b);
+            connectTwoClients(a, b);
             break;
         }
     }
@@ -317,8 +366,12 @@ void Server::timerEvent(QTimerEvent* event)
 {
     Q_UNUSED(event);
 
-    sessions_.remove_if([](const std::unique_ptr<GameSession>& s) {
-        return s->isFinished();
+    sessions_.remove_if([this](const std::unique_ptr<GameSession>& s) {
+        if (s->isFinished()) {
+            sessionById_.remove(s->id());
+            return true;
+        }
+        return false;
     });
 
     for (auto it = clients_.begin(); it != clients_.end(); ) {
@@ -354,10 +407,22 @@ void Server::onClientDisconnected(Client* client)
 
 void Server::disconnectClient(Client* client)
 {
-    GameSession* session = client->session();
-    markClientDisconnected(client);
-    if (session)
-        session->handleDisconnect(client);
+    if (client->isBot()) {
+        markClientDisconnected(client);
+        QList<int> toRemove;
+        for (auto it = sessionById_.constBegin(); it != sessionById_.constEnd(); ++it) {
+            if (it.value()->involvesPlayer(client)) {
+                it.value()->handleDisconnect(client);
+                toRemove.append(it.key());
+            }
+        }
+        for (int id : toRemove) sessionById_.remove(id);
+    } else {
+        GameSession* session = client->session();
+        markClientDisconnected(client);
+        if (session)
+            session->handleDisconnect(client);
+    }
 }
 
 void Server::markClientDisconnected(Client* client) const

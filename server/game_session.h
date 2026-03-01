@@ -20,6 +20,7 @@ public:
     bool handleMove(Client* sender, int x, int y);
     void handleDisconnect(Client* disconnected);
 
+    [[nodiscard]] int id() const;
     [[nodiscard]] bool isFinished() const;
     [[nodiscard]] Client* opponentOf(const Client* client) const;
     [[nodiscard]] bool involvesPlayer(const Client* c) const;
@@ -30,6 +31,9 @@ private:
     int currentPlayerIndex_;
     bool isFinished_;
     AuthManager* authManager_;
+    int id_;
+
+    static int nextId_;
     std::function<void()> onFinished_;
 
     [[nodiscard]] Client* currentPlayer() const;
@@ -45,4 +49,5 @@ private:
     void sendWrongstep(Client* player) const;
     void sendWin(Client* player) const;
     void sendLose(Client* player) const;
+    void sendAbort(Client* player) const;
 };

@@ -3,8 +3,8 @@
 #include <QHostAddress>
 
 namespace ServerConfig {
-    enum class ProtocolVersion : int { V1 = 1 };
-    inline constexpr ProtocolVersion PROTOCOL_VERSION = ProtocolVersion::V1;
+    enum class ProtocolVersion : int { V1 = 1, V2 = 2 };
+    inline constexpr ProtocolVersion PROTOCOL_VERSION = ProtocolVersion::V2;
 
     inline const QString DEFAULT_GAME_NAME = "viruswar";
 

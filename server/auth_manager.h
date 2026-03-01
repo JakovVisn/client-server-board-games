@@ -20,6 +20,8 @@ public:
     void recordWin(const QString& login) const;
     void recordLoss(const QString& login) const;
 
+    [[nodiscard]] bool isBot(const QString& login);
+
 private:
     QString filePath_;
     QString statsFilePath_;

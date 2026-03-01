@@ -61,6 +61,22 @@ void AuthManager::recordLoss(const QString& login) const
     updateStats(login, 0, 1);
 }
 
+bool AuthManager::isBot(const QString& login)
+{
+    QFile file(filePath_);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        const QString line = in.readLine();
+        const QStringList parts = line.split(':');
+        if (parts.size() >= 3 && parts.at(0).trimmed() == login)
+            return parts.at(2).trimmed() == "bot";
+    }
+    return false;
+}
+
 void AuthManager::updateStats(const QString& login, int winDelta, int lossDelta) const
 {
     QFile file(statsFilePath_);

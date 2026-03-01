@@ -45,6 +45,9 @@ public:
     [[nodiscard]] QMap<QString, int> preferredOpponents() const;
     void setPreferredOpponents(const QMap<QString, int>& prefs);
 
+    [[nodiscard]] bool isBot() const;
+    void setBot(bool bot);
+
     void updateActivity();
     [[nodiscard]] qint64 millisecondsSinceLastActivity() const;
 
@@ -67,6 +70,7 @@ private:
     int boardWidth_ = 0;
     int boardHeight_ = 0;
     QMap<QString, int> preferredOpponents_;
+    bool isBot_ = false;
     QDateTime lastActivity_ = QDateTime::currentDateTime();
     bool pingPending_ = false;
     GameSession* session_ = nullptr;

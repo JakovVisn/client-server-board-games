@@ -2,6 +2,8 @@
 #include "auth_manager.h"
 #include "client.h"
 
+int GameSession::nextId_ = 0;
+
 GameSession::GameSession(std::unique_ptr<AbstractGame> game,
                          Client* player0, Client* player1,
                          AuthManager* authManager)
@@ -10,13 +12,16 @@ GameSession::GameSession(std::unique_ptr<AbstractGame> game,
     , currentPlayerIndex_(0)
     , isFinished_(false)
     , authManager_(authManager)
+    , id_(nextId_++)
 {
 }
 
+int GameSession::id() const { return id_; }
+
 void GameSession::start()
 {
-    players_[0]->setSession(this);
-    players_[1]->setSession(this);
+    if (!players_[0]->isBot()) players_[0]->setSession(this);
+    if (!players_[1]->isBot()) players_[1]->setSession(this);
     sendFound(players_[0], players_[1], "first");
     sendFound(players_[1], players_[0], "second");
     sendGo(players_[0]);
@@ -91,7 +96,7 @@ void GameSession::finishGame(Client* winner, Client* loser)
     auto cleanup = [](Client* p) {
         if (p->status() != Client::Status::Disconnected)
             p->setStatus(Client::Status::Authorized);
-        p->setSession(nullptr);
+        p->setSession(nullptr);  // no-op for bots (was never set)
     };
     cleanup(winner);
     cleanup(loser);
@@ -107,9 +112,10 @@ void GameSession::finishGameDisconnect(Client* winner, Client* loser)
         authManager_->recordLoss(loser->login());
     }
 
-    sendWin(winner);
+    // Bots get abort (no reward), humans get win/lose as usual
+    winner->isBot() ? sendAbort(winner) : sendWin(winner);
     if (loser->status() != Client::Status::Disconnected)
-        sendLose(loser);
+        loser->isBot() ? sendAbort(loser) : sendLose(loser);
 
     auto cleanup = [](Client* p) {
         if (p->status() != Client::Status::Disconnected)
@@ -123,46 +129,50 @@ void GameSession::finishGameDisconnect(Client* winner, Client* loser)
     if (onFinished_) onFinished_();
 }
 
-// ── Message helpers ───────────────────────────────────────────────────────────
+// ── Unified message helpers ───────────────────────────────────────────────────
 
 void GameSession::sendFound(Client* receiver, Client* opponent, const QString& role) const
 {
-    receiver->send(QString("found:%1:%2:%3:%4:%5:")
-        .arg(opponent->login())
-        .arg(game_->gameName())
-        .arg(game_->boardWidth())
-        .arg(game_->boardHeight())
-        .arg(role));
+    const QString gameInfo = QString("%1:%2:%3:")
+        .arg(game_->gameName()).arg(game_->boardWidth()).arg(game_->boardHeight());
+    receiver->send(QString("found:%1:%2:%3%4:")
+        .arg(id_).arg(opponent->login()).arg(gameInfo).arg(role));
 }
 
 void GameSession::sendGo(Client* player) const
 {
-    player->send(QString("go:%1:%2:")
+    player->send(QString("go:%1:%2:%3:")
         .arg(game_->serializeForCurrentPlayer())
-        .arg(game_->movesRemaining()));
+        .arg(game_->movesRemaining())
+        .arg(id_));
 }
 
 void GameSession::sendField1(Client* player, const QString& type, int x, int y) const
 {
-    player->send(QString("field1:%1:%2:%3:").arg(type).arg(x).arg(y));
+    player->send(QString("field1:%1:%2:%3:%4:").arg(type).arg(x).arg(y).arg(id_));
 }
 
 void GameSession::sendField2(Client* player, const QString& type, int x, int y) const
 {
-    player->send(QString("field2:%1:%2:%3:").arg(type).arg(x).arg(y));
+    player->send(QString("field2:%1:%2:%3:%4:").arg(type).arg(x).arg(y).arg(id_));
 }
 
 void GameSession::sendWrongstep(Client* player) const
 {
-    player->send("wrongstep:");
+    player->send(QString("wrongstep:%1:").arg(id_));
 }
 
 void GameSession::sendWin(Client* player) const
 {
-    player->send("win:");
+    player->send(QString("win:%1:").arg(id_));
 }
 
 void GameSession::sendLose(Client* player) const
 {
-    player->send("lose:");
+    player->send(QString("lose:%1:").arg(id_));
+}
+
+void GameSession::sendAbort(Client* player) const
+{
+    player->send(QString("abort:%1:").arg(id_));
 }
