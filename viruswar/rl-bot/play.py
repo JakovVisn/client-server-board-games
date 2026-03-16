@@ -1,14 +1,7 @@
 """
-Inference script — loads a trained model and plays continuously on the server.
+Inference script — loads a trained CNN model and plays continuously on the server.
 
-Single TCP connection, supports multiple simultaneous games via GAMEID multiplexing.
-Requires login to be registered as a bot in auth.txt (login:password:bot).
-
-Credentials are read from .env (see .env.example). CLI args override env vars.
-
-Usage:
-  python play.py --model models/promote.zip
-  python play.py --model models/promote.zip --opponent <login>
+Supports multiple simultaneous games via GAMEID multiplexing.
 """
 
 import argparse
@@ -51,22 +44,44 @@ def _handle_signal(sig, frame):
         sys.exit(0)
 
 
+# ─────────────────────────────────────────────────────────────
+# 🔥 CNN observation builder
+# ─────────────────────────────────────────────────────────────
+def build_obs(board: str, moves: int, w: int, h: int) -> np.ndarray:
+    """
+    Returns observation of shape (6, h, w), float32
+    Channels:
+      0–4: one-hot for board cell values 0–4
+      5  : moves_remaining normalized (moves / 3.0)
+    """
+    board_arr = np.array([int(c) for c in board], dtype=np.int8).reshape(h, w)
+
+    obs = np.zeros((6, h, w), dtype=np.float32)
+
+    # channel order matches env.py _obs()
+    obs[0] = (board_arr == 1).astype(np.float32)  # my regular cells
+    obs[1] = (board_arr == 3).astype(np.float32)  # my fortress cells
+    obs[2] = (board_arr == 2).astype(np.float32)  # enemy regular cells
+    obs[3] = (board_arr == 4).astype(np.float32)  # enemy fortress cells
+    obs[4] = (board_arr == 0).astype(np.float32)  # empty cells
+    obs[5].fill(moves / 3.0)
+
+    return obs
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Run the trained VirusWar RL bot (multi-game)")
+    parser = argparse.ArgumentParser(description="Run trained VirusWar CNN bot")
     parser.add_argument("--host",     default=os.getenv("VIRUSWAR_HOST", "127.0.0.1"))
     parser.add_argument("--port",     type=int, default=int(os.getenv("VIRUSWAR_PORT", "1234")))
     parser.add_argument("--login",    default=os.getenv("VIRUSWAR_PLAY_LOGIN"))
     parser.add_argument("--password", default=os.getenv("VIRUSWAR_PLAY_PASSWORD"))
-    parser.add_argument("--opponent", default=os.getenv("VIRUSWAR_PLAY_OPPONENT", ""),
-                        help="Login of opponent to request (empty = anyone)")
-    parser.add_argument("--model",    required=True,
-                        help="Path to saved model (.zip)")
-    parser.add_argument("--promote",  default="",
-                        help="Watch this file and reload model when it changes")
+    parser.add_argument("--opponent", default=os.getenv("VIRUSWAR_PLAY_OPPONENT", ""))
+    parser.add_argument("--model",    required=True)
+    parser.add_argument("--promote",  default="")
     args = parser.parse_args()
 
     if args.login is None or args.password is None:
-        parser.error("--login and --password are required (or set VIRUSWAR_PLAY_LOGIN / VIRUSWAR_PLAY_PASSWORD in .env)")
+        parser.error("--login and --password required")
 
     model = MaskablePPO.load(args.model)
     print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Loaded model from {args.model}")
@@ -82,9 +97,7 @@ def main():
         if mtime > last_mtime:
             last_mtime = mtime
             model = MaskablePPO.load(promote_path)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Reloaded model — previous: {wins}/{games_played} wins"
-                  f" ({wins/games_played:.1%})" if games_played else
-                  f"[{datetime.now().strftime('%H:%M:%S')}][play] Reloaded model from {promote_path}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Reloaded promoted model")
             games_played = 0
             wins = 0
 
@@ -97,7 +110,7 @@ def main():
             conn.connect(preferred_opponent=args.opponent)
             break
         except (ConnectionError, OSError) as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Connection failed: {e}. Retrying in 3s...")
+            print(f"[play] Connection failed: {e}. Retrying...")
             time.sleep(3)
 
     active: set[int] = set()
@@ -107,82 +120,48 @@ def main():
 
     try:
         while True:
-            try:
-                msg = conn.read_message()
-            except (ConnectionError, OSError) as e:
-                if _shutdown_requested:
-                    break
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Connection lost: {e}. Reconnecting...")
-                active.clear()
-                while not _shutdown_requested:
-                    time.sleep(3)
-                    try:
-                        conn.connect(preferred_opponent=args.opponent)
-                        break
-                    except (ConnectionError, OSError) as e:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Reconnect failed: {e}. Retrying in 3s...")
-                if _shutdown_requested:
-                    break
-                continue
+            msg = conn.read_message()
 
+            # game start
             m = _RE_FOUND.match(msg)
             if m:
                 game_id, opponent = int(m.group(1)), m.group(2)
                 game_sizes[game_id] = (int(m.group(3)), int(m.group(4)))
                 active.add(game_id)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][play] game {game_id:5d} started vs {opponent}  active={len(active)}")
+                print(f"[play] game {game_id} started vs {opponent}")
                 continue
 
             m = _RE_GO.match(msg)
             if m:
                 board, moves, game_id = m.group(1), int(m.group(2)), int(m.group(3))
                 w, h = game_sizes.get(game_id, (10, 10))
-                obs = np.array([int(c) for c in board] + [moves], dtype=np.int8)
+
+                obs = build_obs(board, moves, w, h)
                 mask = np.array(valid_action_mask(board, w, h), dtype=bool)
                 action, _ = model.predict(obs, action_masks=mask, deterministic=True)
                 conn.send_move(int(action) % w, int(action) // w, game_id)
                 continue
 
-            if _RE_WRONGSTEP.match(msg):
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][play] WARNING: wrongstep in game {_RE_WRONGSTEP.match(msg).group(1)}")
-                continue
-
-            if msg.startswith("abort:"):
-                game_id = int(msg.split(":")[1])
-                active.discard(game_id)
-                if _shutdown_requested and not active:
-                    break
-                continue
-
+            # win
             m = _RE_WIN.match(msg)
             if m:
                 active.discard(int(m.group(1)))
                 games_played += 1
                 wins += 1
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][play] game {games_played:5d}  WIN   win_rate={wins/games_played:.1%}"
-                      f"  ({wins}/{games_played})  active={len(active)}")
+                print(f"[play] WIN  winrate={wins/games_played:.1%}")
                 check_promote()
-                if _shutdown_requested and not active:
-                    break
                 continue
 
+            # lose
             m = _RE_LOSE.match(msg)
             if m:
                 active.discard(int(m.group(1)))
                 games_played += 1
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][play] game {games_played:5d}  LOSS  win_rate={wins/games_played:.1%}"
-                      f"  ({wins}/{games_played})  active={len(active)}")
+                print(f"[play] LOSS winrate={wins/games_played:.1%}")
                 check_promote()
-                if _shutdown_requested and not active:
-                    break
                 continue
 
-    except KeyboardInterrupt:
-        pass
     finally:
-        summary = (f"{wins}/{games_played} wins ({wins/games_played:.1%})"
-                   if games_played else "no games played")
-        print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Stopped. {summary}")
         conn.disconnect()
 
 
