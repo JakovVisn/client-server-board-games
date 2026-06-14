@@ -8,9 +8,9 @@ namespace ServerConfig {
 
     inline constexpr quint16 PORT = 1234;
     inline const QString DEFAULT_HOST = QStringLiteral("0.0.0.0");
-    inline constexpr int SEARCH_INTERVAL = 3000;
+    inline constexpr int SEARCH_INTERVAL = 200;
     inline constexpr int INACTIVE_MIN_MS = 10000;
-    inline constexpr int INACTIVE_MAX_MS = 60000;
+    inline constexpr int INACTIVE_MAX_MS = 300000;
 }
 
 namespace AuthConfig {
