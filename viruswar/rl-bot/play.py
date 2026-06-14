@@ -20,6 +20,7 @@ from sb3_contrib import MaskablePPO
 
 from bot_client import ServerConnection
 from game_logic import valid_action_mask
+from training_logger import TrainingLogger
 
 
 _RE_FOUND     = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
@@ -78,10 +79,14 @@ def main():
     parser.add_argument("--opponent", default=os.getenv("VIRUSWAR_PLAY_OPPONENT", ""))
     parser.add_argument("--model",    required=True)
     parser.add_argument("--promote",  default="")
+    parser.add_argument("--log",      default="models/training_log.md")
     args = parser.parse_args()
 
     if args.login is None or args.password is None:
         parser.error("--login and --password required")
+
+    tlog = TrainingLogger(args.log)
+    tlog.log_note(f"play.py started: model=`{args.model}` opponent=`{args.opponent or 'any'}`")
 
     model = MaskablePPO.load(args.model)
     print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Loaded model from {args.model}")
@@ -98,6 +103,7 @@ def main():
             last_mtime = mtime
             model = MaskablePPO.load(promote_path)
             print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Reloaded promoted model")
+            tlog.log_note(f"play.py reloaded promoted model: `{promote_path}`")
             games_played = 0
             wins = 0
 
@@ -105,13 +111,6 @@ def main():
     signal.signal(signal.SIGTERM, _handle_signal)
 
     conn = ServerConnection(args.host, args.port, args.login, args.password)
-    while True:
-        try:
-            conn.connect(preferred_opponent=args.opponent)
-            break
-        except (ConnectionError, OSError) as e:
-            print(f"[play] Connection failed: {e}. Retrying...")
-            time.sleep(3)
 
     active: set[int] = set()
     game_sizes: dict[int, tuple[int, int]] = {}
@@ -119,47 +118,76 @@ def main():
     wins = 0
 
     try:
-        while True:
-            msg = conn.read_message()
+        while True:  # reconnect loop
+            if _shutdown_requested:
+                break
 
-            # game start
-            m = _RE_FOUND.match(msg)
-            if m:
-                game_id, opponent = int(m.group(1)), m.group(2)
-                game_sizes[game_id] = (int(m.group(3)), int(m.group(4)))
-                active.add(game_id)
-                print(f"[play] game {game_id} started vs {opponent}")
+            try:
+                conn.connect(preferred_opponent=args.opponent)
+            except (ConnectionError, OSError) as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Connection failed: {e}. Retrying in 3s...")
+                time.sleep(3)
                 continue
 
-            m = _RE_GO.match(msg)
-            if m:
-                board, moves, game_id = m.group(1), int(m.group(2)), int(m.group(3))
-                w, h = game_sizes.get(game_id, (10, 10))
+            active.clear()
+            game_sizes.clear()
 
-                obs = build_obs(board, moves, w, h)
-                mask = np.array(valid_action_mask(board, w, h), dtype=bool)
-                action, _ = model.predict(obs, action_masks=mask, deterministic=True)
-                conn.send_move(int(action) % w, int(action) // w, game_id)
-                continue
+            try:
+                while True:  # message loop
+                    msg = conn.read_message()
 
-            # win
-            m = _RE_WIN.match(msg)
-            if m:
-                active.discard(int(m.group(1)))
-                games_played += 1
-                wins += 1
-                print(f"[play] WIN  winrate={wins/games_played:.1%}")
-                check_promote()
-                continue
+                    # game start
+                    m = _RE_FOUND.match(msg)
+                    if m:
+                        game_id, opponent = int(m.group(1)), m.group(2)
+                        game_sizes[game_id] = (int(m.group(3)), int(m.group(4)))
+                        if not _shutdown_requested:
+                            active.add(game_id)
+                            print(f"[play] game {game_id} started vs {opponent}")
+                        continue
 
-            # lose
-            m = _RE_LOSE.match(msg)
-            if m:
-                active.discard(int(m.group(1)))
-                games_played += 1
-                print(f"[play] LOSS winrate={wins/games_played:.1%}")
-                check_promote()
-                continue
+                    m = _RE_GO.match(msg)
+                    if m:
+                        board, moves, game_id = m.group(1), int(m.group(2)), int(m.group(3))
+                        w, h = game_sizes.get(game_id, (10, 10))
+
+                        obs = build_obs(board, moves, w, h)
+                        mask = np.array(valid_action_mask(board, w, h), dtype=bool)
+                        action, _ = model.predict(obs, action_masks=mask, deterministic=True)
+                        conn.send_move(int(action) % w, int(action) // w, game_id)
+                        continue
+
+                    # win
+                    m = _RE_WIN.match(msg)
+                    if m:
+                        active.discard(int(m.group(1)))
+                        games_played += 1
+                        wins += 1
+                        print(f"[play] WIN  winrate={wins/games_played:.1%}")
+                        check_promote()
+                        if _shutdown_requested and not active:
+                            break
+                        continue
+
+                    # lose
+                    m = _RE_LOSE.match(msg)
+                    if m:
+                        active.discard(int(m.group(1)))
+                        games_played += 1
+                        print(f"[play] LOSS winrate={wins/games_played:.1%}")
+                        check_promote()
+                        if _shutdown_requested and not active:
+                            break
+                        continue
+
+            except (ConnectionError, OSError) as e:
+                if _shutdown_requested:
+                    break
+                print(f"[{datetime.now().strftime('%H:%M:%S')}][play] Connection lost: {e}. Reconnecting in 3s...")
+                conn.disconnect()
+                time.sleep(3)
+            else:
+                break  # clean exit via shutdown
 
     finally:
         conn.disconnect()

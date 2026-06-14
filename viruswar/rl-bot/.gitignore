@@ -6,4 +6,5 @@ __pycache__/
 models/*.zip
 models-archive/*.zip
 models/tb_logs/
+models/training_log.md
 .env

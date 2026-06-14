@@ -22,6 +22,7 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from env import VirusWarEnv
+from training_logger import TrainingLogger
 
 class ResidualBlock(nn.Module):
     def __init__(self, channels: int):
@@ -66,7 +67,7 @@ class CustomCNN(BaseFeaturesExtractor):
 class PromoteCallback(BaseCallback):
     def __init__(self, promote_path: str, threshold: float,
                  cooldown_steps: int, min_episodes: int,
-                 streak_required: int):
+                 streak_required: int, logger: TrainingLogger | None = None):
         super().__init__()
 
         self._path = promote_path[:-4] if promote_path.endswith(".zip") else promote_path
@@ -76,6 +77,7 @@ class PromoteCallback(BaseCallback):
         self._cooldown = cooldown_steps
         self._min_episodes = min_episodes
         self._streak_required = streak_required
+        self._logger = logger
 
         self._last_promote = -cooldown_steps
         self._streak = 0
@@ -112,17 +114,25 @@ class PromoteCallback(BaseCallback):
             self._streak = 0
             print(f"[{datetime.now().strftime('%H:%M:%S')}][promote] "
                   f"PROMOTED → {self._full_path}")
+            if self._logger:
+                self._logger.log_promotion(self.num_timesteps, win_rate, self._full_path)
 
 
 class RolloutLogCallback(BaseCallback):
-    def __init__(self):
+    def __init__(self, logger: TrainingLogger | None = None, log_every: int = 5):
         super().__init__()
         self._rollout_wins = []
+        self._ep_rewards = []
+        self._logger = logger
+        self._log_every = log_every
+        self._iteration = 0
 
     def _on_step(self) -> bool:
         for info in self.locals.get("infos", []):
             if "game_won" in info:
                 self._rollout_wins.append(1 if info["game_won"] else 0)
+            if "episode" in info:
+                self._ep_rewards.append(info["episode"]["r"])
         return True
 
     def _on_rollout_end(self) -> None:
@@ -130,11 +140,18 @@ class RolloutLogCallback(BaseCallback):
             return
 
         win_rate = sum(self._rollout_wins) / len(self._rollout_wins)
+        ep_rew_mean = (sum(self._ep_rewards) / len(self._ep_rewards)
+                       if self._ep_rewards else 0.0)
         self._rollout_wins = []
+        self._ep_rewards = []
+        self._iteration += 1
 
         print(f"[{datetime.now().strftime('%H:%M:%S')}][train] "
               f"step={self.num_timesteps} "
               f"rollout_win_rate={win_rate:.1%}")
+
+        if self._logger and self._iteration % self._log_every == 0:
+            self._logger.log_rollout(self.num_timesteps, win_rate, ep_rew_mean)
 
 _stop_count = 0
 
@@ -164,9 +181,24 @@ def main():
     parser.add_argument("--save-dir", default="models")
     parser.add_argument("--load", default=None)
     parser.add_argument("--promote", default="")
+    parser.add_argument("--log", default="")
+    parser.add_argument("--target-kl", type=float,
+                        default=float(os.getenv("VIRUSWAR_TARGET_KL", "0")) or None)
+    parser.add_argument("--clip-range", type=float,
+                        default=float(os.getenv("VIRUSWAR_CLIP_RANGE", "0.2")))
+    parser.add_argument("--n-epochs", type=int,
+                        default=int(os.getenv("VIRUSWAR_N_EPOCHS", "10")))
+    parser.add_argument("--ent-coef", type=float,
+                        default=float(os.getenv("VIRUSWAR_ENT_COEF", "0.05")))
     args = parser.parse_args()
 
+    # 0.0 in env means None (no KL limit)
+    target_kl = args.target_kl if args.target_kl != 0.0 else None
+
     os.makedirs(args.save_dir, exist_ok=True)
+
+    log_path = args.log or os.path.join(args.save_dir, "training_log.md")
+    tlog = TrainingLogger(log_path)
 
     env = VirusWarEnv(args.host, args.port,
                       args.login, args.password,
@@ -190,8 +222,15 @@ def main():
     if args.load:
         model = MaskablePPO.load(args.load, env=env)
         model.learning_rate = lr_schedule
-        model.target_kl = None
-        print(f"Resumed from {args.load}")
+        model.target_kl = target_kl
+        model.clip_range = (lambda c: lambda _: c)(args.clip_range)
+        model.n_epochs = args.n_epochs
+        model.ent_coef = args.ent_coef
+        print(f"Resumed from {args.load} "
+              f"(target_kl={target_kl}, clip_range={args.clip_range}, "
+              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef})")
+        tlog.log_session_start(args.load, args.opponent, target_kl,
+                               args.clip_range, args.n_epochs, args.ent_coef)
     else:
         model = MaskablePPO(
             "CnnPolicy",
@@ -200,15 +239,19 @@ def main():
             verbose=1,
             gamma=0.99,
             n_steps=2048,
-            n_epochs=10,
-            ent_coef=0.05,
+            n_epochs=args.n_epochs,
+            ent_coef=args.ent_coef,
             learning_rate=lr_schedule,
             batch_size=256,
-            clip_range=0.2,
-            target_kl=0.01,
+            clip_range=args.clip_range,
+            target_kl=target_kl,
             vf_coef=0.5,
         )
-        print("Started fresh training (residual CNN)")
+        print(f"Started fresh training (residual CNN) "
+              f"(target_kl={target_kl}, clip_range={args.clip_range}, "
+              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef})")
+        tlog.log_session_start(None, args.opponent, target_kl,
+                               args.clip_range, args.n_epochs, args.ent_coef)
 
     checkpoint_cb = CheckpointCallback(
         save_freq=20_000,
@@ -216,7 +259,7 @@ def main():
         name_prefix="rl_bot",
     )
 
-    callbacks = [checkpoint_cb, RolloutLogCallback()]
+    callbacks = [checkpoint_cb, RolloutLogCallback(logger=tlog)]
 
     if args.promote:
         callbacks.append(
@@ -226,6 +269,7 @@ def main():
                 cooldown_steps=20_000,
                 min_episodes=100,
                 streak_required=3,
+                logger=tlog,
             )
         )
 
@@ -246,6 +290,7 @@ def main():
                                  f"rl_bot_{model.num_timesteps}_steps")
         model.save(save_path)
         print(f"Saved → {save_path}.zip")
+        tlog.log_session_end(model.num_timesteps, f"{save_path}.zip")
 
 
 if __name__ == "__main__":
