@@ -23,38 +23,45 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from env import VirusWarEnv
 
+class ResidualBlock(nn.Module):
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn1   = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn2   = nn.BatchNorm2d(channels)
+        self.relu  = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        return self.relu(out + residual)
+
+
 class CustomCNN(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim=256):
+    def __init__(self, observation_space, features_dim: int = 256,
+                 n_channels: int = 64, n_res_blocks: int = 4):
         super().__init__(observation_space, features_dim)
+        n_input = observation_space.shape[0]
+        h, w = observation_space.shape[1], observation_space.shape[2]
 
-        n_input_channels = observation_space.shape[0]
-
-        self.cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
+        self.stem = nn.Sequential(
+            nn.Conv2d(n_input, n_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(n_channels),
+            nn.ReLU(inplace=True),
         )
-
-        with torch.no_grad():
-            sample = torch.zeros(1, *observation_space.shape)
-            n_flatten = self.cnn(sample).view(1, -1).shape[1]
-
-        self.linear = nn.Sequential(
+        self.tower = nn.Sequential(
+            *[ResidualBlock(n_channels) for _ in range(n_res_blocks)]
+        )
+        self.head = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(n_flatten, features_dim),
-            nn.ReLU(),
+            nn.Linear(n_channels * h * w, features_dim),
+            nn.ReLU(inplace=True),
         )
 
-    def forward(self, observations):
-        return self.linear(self.cnn(observations))
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        return self.head(self.tower(self.stem(observations)))
 
 class PromoteCallback(BaseCallback):
     def __init__(self, promote_path: str, threshold: float,
@@ -153,7 +160,7 @@ def main():
     parser.add_argument("--login", default=os.getenv("VIRUSWAR_TRAIN_LOGIN"))
     parser.add_argument("--password", default=os.getenv("VIRUSWAR_TRAIN_PASSWORD"))
     parser.add_argument("--opponent", default=os.getenv("VIRUSWAR_TRAIN_OPPONENT", ""))
-    parser.add_argument("--steps", type=int, default=500_000)
+    parser.add_argument("--steps", type=int, default=2_000_000)
     parser.add_argument("--save-dir", default="models")
     parser.add_argument("--load", default=None)
     parser.add_argument("--promote", default="")
@@ -167,13 +174,23 @@ def main():
 
     env = ActionMasker(env, mask_fn)
 
+    def lr_schedule(progress: float) -> float:
+        """Linear decay from 3e-4 to 5e-5 as progress goes 1→0."""
+        return 5e-5 + (3e-4 - 5e-5) * progress
+
     policy_kwargs = dict(
         features_extractor_class=CustomCNN,
-        features_extractor_kwargs=dict(features_dim=256),
+        features_extractor_kwargs=dict(
+            features_dim=256,
+            n_channels=64,
+            n_res_blocks=4,
+        ),
     )
 
     if args.load:
         model = MaskablePPO.load(args.load, env=env)
+        model.learning_rate = lr_schedule
+        model.target_kl = None
         print(f"Resumed from {args.load}")
     else:
         model = MaskablePPO(
@@ -181,15 +198,17 @@ def main():
             env,
             policy_kwargs=policy_kwargs,
             verbose=1,
-            gamma=0.995,
-            n_steps=4096,
-            ent_coef=0.02,
-            learning_rate=1e-4,
-            batch_size=512,
+            gamma=0.99,
+            n_steps=2048,
+            n_epochs=10,
+            ent_coef=0.05,
+            learning_rate=lr_schedule,
+            batch_size=256,
             clip_range=0.2,
             target_kl=0.01,
+            vf_coef=0.5,
         )
-        print("Started fresh CNN training")
+        print("Started fresh training (residual CNN)")
 
     checkpoint_cb = CheckpointCallback(
         save_freq=20_000,
@@ -205,8 +224,8 @@ def main():
                 args.promote,
                 threshold=0.55,
                 cooldown_steps=20_000,
-                min_episodes=50,
-                streak_required=2,
+                min_episodes=100,
+                streak_required=3,
             )
         )
 

@@ -24,15 +24,13 @@ from bot_client import ServerConnection
 from game_logic import valid_action_mask
 
 # Bot protocol: found:GAMEID:OPPONENT:GAMENAME:W:H:role:
-_RE_FOUND      = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
+_RE_FOUND     = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
 # Bot protocol: go:BOARD:MOVES:GAMEID:
-_RE_GO         = re.compile(r"go:([0-4]+):(\d+):(\d+):")
+_RE_GO        = re.compile(r"go:([0-4]+):(\d+):(\d+):")
 # Bot protocol: field1:TYPE:X:Y:GAMEID:
-_RE_FIELD1     = re.compile(r"field1:\w+:-?\d+:-?\d+:\d+:")
-# Bot protocol: field2:TYPE:X:Y:GAMEID:
-_RE_FIELD2     = re.compile(r"field2:(\w+):-?\d+:-?\d+:\d+:")
+_RE_FIELD1    = re.compile(r"field1:\w+:-?\d+:-?\d+:\d+:")
 # Bot protocol: wrongstep:GAMEID:
-_RE_WRONGSTEP  = re.compile(r"wrongstep:\d+:")
+_RE_WRONGSTEP = re.compile(r"wrongstep:\d+:")
 
 
 class VirusWarEnv(gym.Env):
@@ -87,48 +85,28 @@ class VirusWarEnv(gym.Env):
             return self._obs(), 0.0, False, True, {}
 
     def _step(self, x: int, y: int):
-        board_before_move = self._board
-        is_last_submove = self._moves_remaining == 1
-        move_type = None
         self._client.send_move(x, y, self._game_id)
 
         while True:
             msg = self._client.read_message()
 
-            # field2: our move confirmed — capture type for last-submove reward reconstruction
-            if msg.startswith("field2:"):
-                if is_last_submove:
-                    m2 = _RE_FIELD2.match(msg)
-                    if m2:
-                        move_type = m2.group(1)
+            # Acknowledged server messages that carry no learning signal
+            if (msg.startswith("field2:")
+                    or _RE_FIELD1.match(msg)
+                    or msg == "wrongcmd:"):
                 continue
 
-            # wrongstep: mask mismatch between game_logic.py and server — log for cross-validation
+            # wrongstep means game_logic.py and server disagree — log for debugging
             if _RE_WRONGSTEP.match(msg):
                 print(f"[{datetime.now().strftime('%H:%M:%S')}][env] WARNING: wrongstep")
-                continue
-
-            # wrongcmd: sent when step: arrives with no active session (timing issue)
-            if msg == "wrongcmd:":
-                continue
-
-            # field1: opponent made a move — board comes in the next go:
-            if _RE_FIELD1.match(msg):
                 continue
 
             # go: our turn (next sub-move or after opponent's full turn)
             m = _RE_GO.match(msg)
             if m:
-                if is_last_submove:
-                    shaped = self._shaped_reward(
-                        board_before_move,
-                        self._apply_move(board_before_move, x, y, move_type)
-                    )
-                else:
-                    shaped = self._shaped_reward(board_before_move, m.group(1))
                 self._board = m.group(1)
                 self._moves_remaining = int(m.group(2))
-                return self._obs(), shaped, False, False, {}
+                return self._obs(), 0.0, False, False, {}
 
             if msg.startswith("win:"):
                 return self._obs(), 1.0, True, False, {"game_won": True}
@@ -190,22 +168,6 @@ class VirusWarEnv(gym.Env):
             dtype=np.float32,
         )
         self.action_space = spaces.Discrete(self.w * self.h)
-
-    # =========================================================
-
-    def _apply_move(self, board: str, x: int, y: int,
-                    move_type: str | None) -> str:
-        if move_type is None:
-            return board
-        cells = list(board)
-        cells[y * self.w + x] = '1' if move_type == 'standard' else '3'
-        return ''.join(cells)
-
-    def _shaped_reward(self, board_before: str,
-                       board_after: str) -> float:
-        x_delta = board_after.count('1') - board_before.count('1')
-        catch_delta = board_after.count('3') - board_before.count('3')
-        return x_delta * 0.01 + catch_delta * 0.03
 
     # =========================================================
 
