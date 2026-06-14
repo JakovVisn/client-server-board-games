@@ -265,10 +265,10 @@ def main():
         callbacks.append(
             PromoteCallback(
                 args.promote,
-                threshold=0.55,
-                cooldown_steps=20_000,
-                min_episodes=100,
-                streak_required=3,
+                threshold=float(os.getenv("VIRUSWAR_PROMOTE_THRESHOLD", "0.55")),
+                cooldown_steps=int(os.getenv("VIRUSWAR_PROMOTE_COOLDOWN", "20000")),
+                min_episodes=int(os.getenv("VIRUSWAR_PROMOTE_MIN_EP", "100")),
+                streak_required=int(os.getenv("VIRUSWAR_PROMOTE_STREAK", "3")),
                 logger=tlog,
             )
         )
