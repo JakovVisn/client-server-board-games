@@ -65,18 +65,18 @@ class CustomCNN(BaseFeaturesExtractor):
         return self.head(self.tower(self.stem(observations)))
 
 class PromoteCallback(BaseCallback):
-    def __init__(self, promote_path: str, threshold: float,
+    def __init__(self, promoted_dir: str, threshold: float,
                  cooldown_steps: int, min_episodes: int,
-                 streak_required: int, logger: TrainingLogger | None = None):
+                 streak_required: int, keep_last: int = 10,
+                 logger: TrainingLogger | None = None):
         super().__init__()
 
-        self._path = promote_path[:-4] if promote_path.endswith(".zip") else promote_path
-        self._full_path = self._path + ".zip"
-
+        self._dir = promoted_dir
         self._threshold = threshold
         self._cooldown = cooldown_steps
         self._min_episodes = min_episodes
         self._streak_required = streak_required
+        self._keep_last = keep_last
         self._logger = logger
 
         self._last_promote = -cooldown_steps
@@ -109,13 +109,26 @@ class PromoteCallback(BaseCallback):
             self._streak = 0
 
         if self._streak >= self._streak_required:
-            self.model.save(self._path)
+            os.makedirs(self._dir, exist_ok=True)
+            name = f"promoted_{self.num_timesteps:010d}"
+            full_path = os.path.join(self._dir, name + ".zip")
+            self.model.save(os.path.join(self._dir, name))
             self._last_promote = self.num_timesteps
             self._streak = 0
             print(f"[{datetime.now().strftime('%H:%M:%S')}][promote] "
-                  f"PROMOTED → {self._full_path}")
+                  f"PROMOTED → {full_path}")
             if self._logger:
-                self._logger.log_promotion(self.num_timesteps, win_rate, self._full_path)
+                self._logger.log_promotion(self.num_timesteps, win_rate, full_path)
+
+            # Prune old models, keep only the most recent keep_last
+            existing = sorted(
+                (f for f in os.scandir(self._dir) if f.name.startswith("promoted_") and f.name.endswith(".zip")),
+                key=lambda f: f.name,
+                reverse=True,
+            )
+            for old in existing[self._keep_last:]:
+                os.remove(old.path)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}][promote] pruned {old.name}")
 
 
 class RolloutLogCallback(BaseCallback):
@@ -187,7 +200,7 @@ def main():
     parser.add_argument("--steps", type=int, default=2_000_000)
     parser.add_argument("--save-dir", default="models")
     parser.add_argument("--load", default=None)
-    parser.add_argument("--promote", default="")
+    parser.add_argument("--promoted-dir", default="models/promoted")
     parser.add_argument("--log", default="")
     parser.add_argument("--target-kl", type=float,
                         default=float(os.getenv("VIRUSWAR_TARGET_KL", "0")) or None)
@@ -268,17 +281,17 @@ def main():
 
     callbacks = [checkpoint_cb, RolloutLogCallback(logger=tlog)]
 
-    if args.promote:
-        callbacks.append(
-            PromoteCallback(
-                args.promote,
-                threshold=float(os.getenv("VIRUSWAR_PROMOTE_THRESHOLD", "0.55")),
-                cooldown_steps=int(os.getenv("VIRUSWAR_PROMOTE_COOLDOWN", "20000")),
-                min_episodes=int(os.getenv("VIRUSWAR_PROMOTE_MIN_EP", "100")),
-                streak_required=int(os.getenv("VIRUSWAR_PROMOTE_STREAK", "3")),
-                logger=tlog,
-            )
+    callbacks.append(
+        PromoteCallback(
+            args.promoted_dir,
+            threshold=float(os.getenv("VIRUSWAR_PROMOTE_THRESHOLD", "0.55")),
+            cooldown_steps=int(os.getenv("VIRUSWAR_PROMOTE_COOLDOWN", "20000")),
+            min_episodes=int(os.getenv("VIRUSWAR_PROMOTE_MIN_EP", "100")),
+            streak_required=int(os.getenv("VIRUSWAR_PROMOTE_STREAK", "3")),
+            keep_last=int(os.getenv("VIRUSWAR_PROMOTE_KEEP", "10")),
+            logger=tlog,
         )
+    )
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
