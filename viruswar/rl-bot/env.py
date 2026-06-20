@@ -36,13 +36,18 @@ _RE_WRONGSTEP = re.compile(r"wrongstep:\d+:")
 class VirusWarEnv(gym.Env):
     metadata = {}
 
-    def __init__(self, host: str, port: int, login: str, password: str,
+    def __init__(self, host: str, port: int,
+                 credentials: list[tuple[str, str]],
                  opponent: str = "",
                  board_w: int = 10, board_h: int = 10):
         super().__init__()
-        self._client = ServerConnection(host, port, login, password)
+        self._host = host
+        self._port = port
+        self._credentials = credentials
         self._opponent = opponent
         self._connected = False
+        self._client: ServerConnection | None = None
+        self._login = "?"
 
         self.w = board_w
         self.h = board_h
@@ -62,15 +67,16 @@ class VirusWarEnv(gym.Env):
         while True:
             try:
                 if not self._connected:
-                    self._client.connect(preferred_opponent=self._opponent)
-                    self._connected = True
+                    self._try_connect()
                 self._board, self._moves_remaining = self._wait_for_game()
                 return self._obs(), {}
             except (ConnectionError, OSError) as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][env] "
+                print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] "
                       f"Connection error: {e}. Retrying in 3s...")
                 self._connected = False
-                self._client.disconnect()
+                if self._client:
+                    self._client.disconnect()
+                    self._client = None
                 time.sleep(3)
 
     def step(self, action: int):
@@ -78,10 +84,12 @@ class VirusWarEnv(gym.Env):
         try:
             return self._step(x, y)
         except (ConnectionError, OSError) as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}][env] "
+            print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] "
                   f"Connection lost during step: {e}")
             self._connected = False
-            self._client.disconnect()
+            if self._client:
+                self._client.disconnect()
+                self._client = None
             return self._obs(), 0.0, False, True, {}
 
     def _step(self, x: int, y: int):
@@ -132,8 +140,32 @@ class VirusWarEnv(gym.Env):
         )
 
     def close(self):
-        self._client.disconnect()
+        if self._client:
+            self._client.disconnect()
+            self._client = None
         self._connected = False
+
+    # =========================================================
+    # Connection
+    # =========================================================
+
+    def _try_connect(self):
+        """Try credentials in order, skip accounts that are alreadyconnected."""
+        for login, password in self._credentials:
+            client = ServerConnection(self._host, self._port, login, password)
+            try:
+                client.connect(preferred_opponent=self._opponent)
+                self._client = client
+                self._connected = True
+                self._login = login
+                print(f"[{datetime.now().strftime('%H:%M:%S')}][{login}] Connected")
+                return
+            except ConnectionError as e:
+                if "alreadyconnected" in str(e):
+                    client.disconnect()
+                    continue
+                raise
+        raise ConnectionError("No training account available (all alreadyconnected)")
 
     # =========================================================
     # Observation (CNN format)
@@ -190,7 +222,7 @@ class VirusWarEnv(gym.Env):
                 if w != self.w or h != self.h:
                     self.w, self.h = w, h
                     self._update_spaces()
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][env] "
+                print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] "
                       f"Game started vs {m.group(2)}")
                 continue
 

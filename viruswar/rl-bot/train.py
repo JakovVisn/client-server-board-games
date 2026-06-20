@@ -3,11 +3,13 @@ Training script for the VirusWar RL bot (CNN version).
 """
 
 import argparse
+import json
 import os
 import signal
 import sys
 from collections import deque
 from datetime import datetime
+from functools import partial
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -20,9 +22,11 @@ from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 from env import VirusWarEnv
 from training_logger import TrainingLogger
+
 
 class ResidualBlock(nn.Module):
     def __init__(self, channels: int):
@@ -63,6 +67,7 @@ class CustomCNN(BaseFeaturesExtractor):
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         return self.head(self.tower(self.stem(observations)))
+
 
 class PromoteCallback(BaseCallback):
     def __init__(self, promoted_dir: str, threshold: float,
@@ -173,6 +178,7 @@ class RolloutLogCallback(BaseCallback):
         if self._logger and self._iteration % self._log_every == 0:
             self._logger.log_rollout(self.num_timesteps, win_rate, ep_rew_mean, server_rt)
 
+
 _stop_count = 0
 
 
@@ -190,13 +196,25 @@ def mask_fn(env: VirusWarEnv) -> np.ndarray:
     return env.action_masks()
 
 
+def _env_factory(host: str, port: int,
+                 credentials: list[tuple[str, str]],
+                 opponent: str):
+    """Module-level factory so SubprocVecEnv can pickle it."""
+    env = VirusWarEnv(host, port, credentials, opponent=opponent)
+    return ActionMasker(env, mask_fn)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=os.getenv("VIRUSWAR_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("VIRUSWAR_PORT", "1234")))
-    parser.add_argument("--login", default=os.getenv("VIRUSWAR_TRAIN_LOGIN"))
-    parser.add_argument("--password", default=os.getenv("VIRUSWAR_TRAIN_PASSWORD"))
-    parser.add_argument("--opponent", default=os.getenv("VIRUSWAR_TRAIN_OPPONENT", ""))
+    parser.add_argument("--credentials",
+                        default=os.getenv("VIRUSWAR_TRAIN_CREDENTIALS", "[]"),
+                        help="JSON array of [login, password] pairs")
+    parser.add_argument("--opponent",
+                        default=os.getenv("VIRUSWAR_TRAIN_OPPONENT", ""))
+    parser.add_argument("--n-envs", type=int,
+                        default=int(os.getenv("VIRUSWAR_N_ENVS", "1")))
     parser.add_argument("--steps", type=int, default=2_000_000)
     parser.add_argument("--save-dir", default="models")
     parser.add_argument("--load", default=None)
@@ -212,19 +230,23 @@ def main():
                         default=float(os.getenv("VIRUSWAR_ENT_COEF", "0.05")))
     args = parser.parse_args()
 
-    # 0.0 in env means None (no KL limit)
     target_kl = args.target_kl if args.target_kl != 0.0 else None
+
+    raw_creds = json.loads(args.credentials)
+    if not raw_creds:
+        parser.error("No credentials — set VIRUSWAR_TRAIN_CREDENTIALS or --credentials")
+    creds: list[tuple[str, str]] = [tuple(c) for c in raw_creds]
 
     os.makedirs(args.save_dir, exist_ok=True)
 
     log_path = args.log or os.path.join(args.save_dir, "training_log.md")
     tlog = TrainingLogger(log_path)
 
-    env = VirusWarEnv(args.host, args.port,
-                      args.login, args.password,
-                      opponent=args.opponent)
-
-    env = ActionMasker(env, mask_fn)
+    make = partial(_env_factory, args.host, args.port, creds, args.opponent)
+    if args.n_envs > 1:
+        env = SubprocVecEnv([make for _ in range(args.n_envs)])
+    else:
+        env = DummyVecEnv([make])
 
     def lr_schedule(progress: float) -> float:
         """Linear decay from 3e-4 to 5e-5 as progress goes 1→0."""
@@ -248,7 +270,8 @@ def main():
         model.ent_coef = args.ent_coef
         print(f"Resumed from {args.load} "
               f"(target_kl={target_kl}, clip_range={args.clip_range}, "
-              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef})")
+              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef}, "
+              f"n_envs={args.n_envs})")
         tlog.log_session_start(args.load, args.opponent, target_kl,
                                args.clip_range, args.n_epochs, args.ent_coef)
     else:
@@ -269,7 +292,8 @@ def main():
         )
         print(f"Started fresh training (residual CNN) "
               f"(target_kl={target_kl}, clip_range={args.clip_range}, "
-              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef})")
+              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef}, "
+              f"n_envs={args.n_envs})")
         tlog.log_session_start(None, args.opponent, target_kl,
                                args.clip_range, args.n_epochs, args.ent_coef)
 
@@ -279,9 +303,9 @@ def main():
         name_prefix="rl_bot",
     )
 
-    callbacks = [checkpoint_cb, RolloutLogCallback(logger=tlog)]
-
-    callbacks.append(
+    callbacks = [
+        checkpoint_cb,
+        RolloutLogCallback(logger=tlog),
         PromoteCallback(
             args.promoted_dir,
             threshold=float(os.getenv("VIRUSWAR_PROMOTE_THRESHOLD", "0.55")),
@@ -290,8 +314,8 @@ def main():
             streak_required=int(os.getenv("VIRUSWAR_PROMOTE_STREAK", "3")),
             keep_last=int(os.getenv("VIRUSWAR_PROMOTE_KEEP", "10")),
             logger=tlog,
-        )
-    )
+        ),
+    ]
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
