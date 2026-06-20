@@ -33,10 +33,12 @@ class TrainingLogger:
             f"clip_range={clip_range}  n_epochs={n_epochs}  ent_coef={ent_coef}\n"
         )
 
-    def log_rollout(self, step: int, win_rate: float, ep_rew_mean: float) -> None:
+    def log_rollout(self, step: int, win_rate: float, ep_rew_mean: float,
+                    server_rt_ms: float = 0.0) -> None:
+        rt_str = f"  server_rt={server_rt_ms:.1f}ms" if server_rt_ms > 0 else ""
         self._append(
             f"- `{self._ts()}` rollout  step={step:,}  "
-            f"win={win_rate:.1%}  rew={ep_rew_mean:+.3f}"
+            f"win={win_rate:.1%}  rew={ep_rew_mean:+.3f}{rt_str}"
         )
 
     def log_promotion(self, step: int, win_rate: float, path: str) -> None:

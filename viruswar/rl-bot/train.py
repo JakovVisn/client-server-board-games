@@ -123,6 +123,7 @@ class RolloutLogCallback(BaseCallback):
         super().__init__()
         self._rollout_wins = []
         self._ep_rewards = []
+        self._server_rt_ms = []
         self._logger = logger
         self._log_every = log_every
         self._iteration = 0
@@ -133,6 +134,8 @@ class RolloutLogCallback(BaseCallback):
                 self._rollout_wins.append(1 if info["game_won"] else 0)
             if "episode" in info:
                 self._ep_rewards.append(info["episode"]["r"])
+            if "server_rt_ms" in info:
+                self._server_rt_ms.append(info["server_rt_ms"])
         return True
 
     def _on_rollout_end(self) -> None:
@@ -142,16 +145,20 @@ class RolloutLogCallback(BaseCallback):
         win_rate = sum(self._rollout_wins) / len(self._rollout_wins)
         ep_rew_mean = (sum(self._ep_rewards) / len(self._ep_rewards)
                        if self._ep_rewards else 0.0)
+        server_rt = (sum(self._server_rt_ms) / len(self._server_rt_ms)
+                     if self._server_rt_ms else 0.0)
         self._rollout_wins = []
         self._ep_rewards = []
+        self._server_rt_ms = []
         self._iteration += 1
 
         print(f"[{datetime.now().strftime('%H:%M:%S')}][train] "
               f"step={self.num_timesteps} "
-              f"rollout_win_rate={win_rate:.1%}")
+              f"rollout_win_rate={win_rate:.1%} "
+              f"server_rt={server_rt:.1f}ms")
 
         if self._logger and self._iteration % self._log_every == 0:
-            self._logger.log_rollout(self.num_timesteps, win_rate, ep_rew_mean)
+            self._logger.log_rollout(self.num_timesteps, win_rate, ep_rew_mean, server_rt)
 
 _stop_count = 0
 

@@ -85,6 +85,7 @@ class VirusWarEnv(gym.Env):
             return self._obs(), 0.0, False, True, {}
 
     def _step(self, x: int, y: int):
+        t0 = time.perf_counter()
         self._client.send_move(x, y, self._game_id)
 
         while True:
@@ -101,21 +102,28 @@ class VirusWarEnv(gym.Env):
                 print(f"[{datetime.now().strftime('%H:%M:%S')}][env] WARNING: wrongstep")
                 continue
 
+            rt_ms = (time.perf_counter() - t0) * 1000
+
             # go: our turn (next sub-move or after opponent's full turn)
             m = _RE_GO.match(msg)
             if m:
                 self._board = m.group(1)
                 self._moves_remaining = int(m.group(2))
-                return self._obs(), 0.0, False, False, {}
+                return self._obs(), 0.0, False, False, {"server_rt_ms": rt_ms}
 
             if msg.startswith("win:"):
-                return self._obs(), 1.0, True, False, {"game_won": True}
+                board_list = list(self._board)
+                board_list[y * self.w + x] = '3' if self._board[y * self.w + x] == '2' else '1'
+                self._board = ''.join(board_list)
+                captures = self._board.count('3')
+                bonus = captures / (self.w * self.h) * 0.5
+                return self._obs(), 1.0 + bonus, True, False, {"game_won": True, "server_rt_ms": rt_ms}
 
             if msg.startswith("lose:"):
-                return self._obs(), -1.0, True, False, {"game_won": False}
+                return self._obs(), -1.0, True, False, {"game_won": False, "server_rt_ms": rt_ms}
 
             if msg.startswith("abort:"):
-                return self._obs(), 0.0, False, True, {}
+                return self._obs(), 0.0, False, True, {"server_rt_ms": rt_ms}
 
     def action_masks(self) -> np.ndarray:
         return np.array(

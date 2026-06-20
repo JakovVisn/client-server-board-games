@@ -116,6 +116,7 @@ def main():
     game_sizes: dict[int, tuple[int, int]] = {}
     games_played = 0
     wins = 0
+    infer_times: list[float] = []
 
     try:
         while True:  # reconnect loop
@@ -153,7 +154,14 @@ def main():
 
                         obs = build_obs(board, moves, w, h)
                         mask = np.array(valid_action_mask(board, w, h), dtype=bool)
+                        t0 = time.perf_counter()
                         action, _ = model.predict(obs, action_masks=mask, deterministic=True)
+                        infer_times.append((time.perf_counter() - t0) * 1000)
+                        if len(infer_times) >= 500:
+                            avg = sum(infer_times) / len(infer_times)
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}][play] "
+                                  f"inference avg={avg:.1f}ms over {len(infer_times)} steps")
+                            infer_times.clear()
                         conn.send_move(int(action) % w, int(action) // w, game_id)
                         continue
 
