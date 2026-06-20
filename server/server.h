@@ -45,6 +45,7 @@ private:
     void connectTwoClients(Client* client1, Client* client2);
     void connectPlayerWithBot(Client* player, Client* bot);
     void connectTwoBots(Client* bot1, Client* bot2);
+    void connectAutoWithBot(Client* seeker, Client* bot);
     void disconnectClient(Client* client);
     void markClientDisconnected(Client* client) const;
 

@@ -48,6 +48,11 @@ public:
     [[nodiscard]] bool isBot() const;
     void setBot(bool bot);
 
+    [[nodiscard]] int autoLimit() const;
+    void setAutoLimit(int limit);
+    [[nodiscard]] int autoSessionCount() const;
+    void adjustAutoSessionCount(int delta);
+
     void updateActivity();
     [[nodiscard]] qint64 millisecondsSinceLastActivity() const;
 
@@ -71,6 +76,8 @@ private:
     int boardHeight_ = 0;
     QMap<QString, int> preferredOpponents_;
     bool isBot_ = false;
+    int autoLimit_ = 0;
+    int autoSessionCount_ = 0;
     QDateTime lastActivity_ = QDateTime::currentDateTime();
     bool pingPending_ = false;
     GameSession* session_ = nullptr;

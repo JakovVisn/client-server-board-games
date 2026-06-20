@@ -77,6 +77,26 @@ bool AuthManager::isBot(const QString& login)
     return false;
 }
 
+int AuthManager::autoConnectionLimit(const QString& login)
+{
+    QFile file(filePath_);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return 0;
+
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        const QString line = in.readLine();
+        const QStringList parts = line.split(':');
+        if (parts.size() >= 4 && parts.at(0).trimmed() == login
+                && parts.at(2).trimmed() == "bot") {
+            bool ok = false;
+            const int limit = parts.at(3).trimmed().toInt(&ok);
+            return (ok && limit > 0) ? limit : 0;
+        }
+    }
+    return 0;
+}
+
 void AuthManager::updateStats(const QString& login, int winDelta, int lossDelta) const
 {
     QFile file(statsFilePath_);

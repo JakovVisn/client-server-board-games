@@ -56,6 +56,11 @@ void Client::setPreferredOpponents(const QMap<QString, int>& prefs) { preferredO
 bool Client::isBot() const { return isBot_; }
 void Client::setBot(bool bot) { isBot_ = bot; }
 
+int Client::autoLimit() const { return autoLimit_; }
+void Client::setAutoLimit(int limit) { autoLimit_ = limit; }
+int Client::autoSessionCount() const { return autoSessionCount_; }
+void Client::adjustAutoSessionCount(int delta) { autoSessionCount_ += delta; }
+
 bool Client::isPingPending() const { return pingPending_; }
 void Client::markPingSent() { pingPending_ = true; }
 

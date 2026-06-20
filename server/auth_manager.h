@@ -21,6 +21,7 @@ public:
     void recordLoss(const QString& login) const;
 
     [[nodiscard]] bool isBot(const QString& login);
+    [[nodiscard]] int autoConnectionLimit(const QString& login);
 
 private:
     QString filePath_;

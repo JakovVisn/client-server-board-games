@@ -146,6 +146,8 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         }
 
         client->setBot(authManager_.isBot(login));
+        if (client->isBot())
+            client->setAutoLimit(authManager_.autoConnectionLimit(login));
         client->setGameName(gameName);
         client->setBoardWidth(w);
         client->setBoardHeight(h);
@@ -282,6 +284,31 @@ void Server::connectPlayerWithBot(Client* player, Client* bot)
     qDebug() << "Game started:" << player->login() << "vs" << bot->login() << "(bot)";
 }
 
+void Server::connectAutoWithBot(Client* seeker, Client* bot)
+{
+    auto game = makeGame(seeker->gameName(), seeker->boardWidth(), seeker->boardHeight());
+    if (!game) return;
+
+    Client* first  = QRandomGenerator::global()->bounded(2) ? bot : seeker;
+    Client* second = (first == bot) ? seeker : bot;
+
+    seeker->setStatus(Client::Status::InGame);
+
+    bot->adjustAutoSessionCount(1);
+
+    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_);
+    const int id = session->id();
+    session->setOnFinished([this, bot] {
+        bot->adjustAutoSessionCount(-1);
+        matchClients();
+    });
+    session->start();
+    sessionById_[id] = session.get();
+    sessions_.push_back(std::move(session));
+
+    qDebug() << "Auto game started:" << seeker->login() << "vs" << bot->login();
+}
+
 void Server::connectTwoBots(Client* bot1, Client* bot2)
 {
     if (QRandomGenerator::global()->bounded(2))
@@ -338,7 +365,8 @@ void Server::matchClients()
                     connectTwoClients(c, opponent);
 
                 matched.insert(c);
-                matched.insert(opponent);
+                if (!opponent->isBot())
+                    matched.insert(opponent);
                 break;
             }
         }
@@ -357,6 +385,24 @@ void Server::matchClients()
             if (!sameGame(a, b)) continue;
 
             connectTwoClients(a, b);
+            break;
+        }
+    }
+
+    // Pass 3: match clients without preferred against bots with available auto-slots
+    for (Client* seeker : pool) {
+        if (seeker->status() != Client::Status::Authorized) continue;
+        if (!seeker->preferredOpponents().isEmpty()) continue;
+        if (seeker->autoLimit() > 0) continue;
+
+        for (Client* bot : pool) {
+            if (bot == seeker) continue;
+            if (!bot->isBot() || bot->autoLimit() <= 0) continue;
+            if (bot->autoSessionCount() >= bot->autoLimit()) continue;
+            if (bot->login() == seeker->login()) continue;
+            if (!sameGame(seeker, bot)) continue;
+
+            connectAutoWithBot(seeker, bot);
             break;
         }
     }
