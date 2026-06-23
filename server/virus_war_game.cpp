@@ -26,6 +26,8 @@ int VirusWarGame::movesRemaining() const
     return kMovesPerTurn - fields_[currentPlayer_].moveIndex();
 }
 
+int VirusWarGame::currentPlayer() const { return currentPlayer_; }
+
 bool VirusWarGame::isValidMove(int x, int y) const
 {
     return fields_[currentPlayer_].isValidMove(x, y);

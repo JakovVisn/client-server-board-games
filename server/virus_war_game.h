@@ -19,6 +19,7 @@ public:
     [[nodiscard]] bool isValidBoardSize(int w, int h) const override;
     [[nodiscard]] int movesRemaining() const override;
 
+    [[nodiscard]] int currentPlayer() const;
     [[nodiscard]] bool isValidMove(int x, int y) const override;
     [[nodiscard]] std::string applyMove(int x, int y) override;
     [[nodiscard]] TurnResult turnResult() const override;
