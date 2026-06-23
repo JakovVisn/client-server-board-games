@@ -8,7 +8,7 @@ VirusWarGame::VirusWarGame(int width, int height)
 {
 }
 
-QString VirusWarGame::gameName() const { return QStringLiteral("viruswar"); }
+std::string VirusWarGame::gameName() const { return "viruswar"; }
 int VirusWarGame::boardWidth() const { return width_; }
 int VirusWarGame::boardHeight() const { return height_; }
 std::pair<int,int> VirusWarGame::defaultBoardSize() const
@@ -31,11 +31,11 @@ bool VirusWarGame::isValidMove(int x, int y) const
     return fields_[currentPlayer_].isValidMove(x, y);
 }
 
-QString VirusWarGame::applyMove(int x, int y)
+std::string VirusWarGame::applyMove(int x, int y)
 {
     const bool captured = fields_[currentPlayer_].applyMove(x, y);
     fields_[1 - currentPlayer_].setCell(x, y, captured ? VirusWarField::Cell::CatchO : VirusWarField::Cell::O);
-    return captured ? QStringLiteral("caught") : QStringLiteral("standard");
+    return captured ? "caught" : "standard";
 }
 
 AbstractGame::TurnResult VirusWarGame::turnResult() const
@@ -50,12 +50,12 @@ AbstractGame::TurnResult VirusWarGame::turnResult() const
     return TurnResult::TurnComplete;
 }
 
-QString VirusWarGame::serializeForCurrentPlayer() const
+std::string VirusWarGame::serializeForCurrentPlayer() const
 {
     return fields_[currentPlayer_].serialize();
 }
 
-QString VirusWarGame::serializeForOpponent() const
+std::string VirusWarGame::serializeForOpponent() const
 {
     return fields_[1 - currentPlayer_].serialize();
 }

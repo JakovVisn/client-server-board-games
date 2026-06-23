@@ -10,8 +10,9 @@ public:
     static constexpr int kDefaultHeight = 10;
 
     explicit VirusWarGame(int width = kDefaultWidth, int height = kDefaultHeight);
+    VirusWarGame(const VirusWarGame&) = default;
 
-    [[nodiscard]] QString gameName() const override;
+    [[nodiscard]] std::string gameName() const override;
     [[nodiscard]] int boardWidth() const override;
     [[nodiscard]] int boardHeight() const override;
     [[nodiscard]] std::pair<int,int> defaultBoardSize() const override;
@@ -19,11 +20,11 @@ public:
     [[nodiscard]] int movesRemaining() const override;
 
     [[nodiscard]] bool isValidMove(int x, int y) const override;
-    [[nodiscard]] QString applyMove(int x, int y) override;
+    [[nodiscard]] std::string applyMove(int x, int y) override;
     [[nodiscard]] TurnResult turnResult() const override;
 
-    [[nodiscard]] QString serializeForCurrentPlayer() const override;
-    [[nodiscard]] QString serializeForOpponent() const override;
+    [[nodiscard]] std::string serializeForCurrentPlayer() const override;
+    [[nodiscard]] std::string serializeForOpponent() const override;
 
     void advanceTurn() override;
 

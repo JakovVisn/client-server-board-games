@@ -33,9 +33,9 @@ void VirusWarField::setCell(int x, int y, Cell value)
     cells_[cellIndex(x, y)] = value;
 }
 
-QString VirusWarField::serialize() const
+std::string VirusWarField::serialize() const
 {
-    QString result;
+    std::string result;
     result.reserve(cells_.size());
     for (Cell c : cells_) {
         switch (c) {
@@ -49,7 +49,7 @@ QString VirusWarField::serialize() const
     return result;
 }
 
-bool VirusWarField::isConnectedToX(int x, int y, QVector<bool>& visited) const
+bool VirusWarField::isConnectedToX(int x, int y, std::vector<bool>& visited) const
 {
     visited[cellIndex(x, y)] = true;
 
@@ -84,7 +84,7 @@ bool VirusWarField::isValidMove(int x, int y) const
         (x == width_ - 1 && y == height_ - 1 && c != Cell::O && cell(0, 0) != Cell::X))
         return true;
 
-    QVector<bool> visited(width_ * height_, false);
+    std::vector<bool> visited(width_ * height_, false);
     return isConnectedToX(x, y, visited);
 }
 
@@ -98,11 +98,11 @@ bool VirusWarField::applyMove(int x, int y)
     return captured;
 }
 
-bool VirusWarField::canCompleteTurn(int& found, QVector<bool>& marked, int movesPerTurn)
+bool VirusWarField::canCompleteTurn(int& found, std::vector<bool>& marked, int movesPerTurn)
 {
     for (int i = 0; i < width_ && found < movesPerTurn; i++) {
         for (int j = 0; j < height_ && found < movesPerTurn; j++) {
-            QVector<bool> visited(width_ * height_, false);
+            std::vector<bool> visited(width_ * height_, false);
             const Cell c = cell(i, j);
             if (c == Cell::CatchX || c == Cell::CatchO || c == Cell::X)
                 continue;
@@ -134,6 +134,6 @@ bool VirusWarField::canCompleteTurn(int& found, QVector<bool>& marked, int moves
 bool VirusWarField::hasMovesForNextTurn(int movesPerTurn)
 {
     int found = 0;
-    QVector<bool> marked(width_ * height_, false);
+    std::vector<bool> marked(width_ * height_, false);
     return canCompleteTurn(found, marked, movesPerTurn);
 }

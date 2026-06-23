@@ -38,7 +38,7 @@ bool GameSession::handleMove(Client* sender, int x, int y)
         return true;
     }
 
-    const QString type = game_->applyMove(x, y);
+    const QString type = QString::fromStdString(game_->applyMove(x, y));
 
     sendField2(currentPlayer(), type, x, y);
     sendField1(waitingPlayer(), type, x, y);
@@ -134,7 +134,7 @@ void GameSession::finishGameDisconnect(Client* winner, Client* loser)
 void GameSession::sendFound(Client* receiver, Client* opponent, const QString& role) const
 {
     const QString gameInfo = QString("%1:%2:%3:")
-        .arg(game_->gameName()).arg(game_->boardWidth()).arg(game_->boardHeight());
+        .arg(QString::fromStdString(game_->gameName())).arg(game_->boardWidth()).arg(game_->boardHeight());
     receiver->send(QString("found:%1:%2:%3%4:")
         .arg(id_).arg(opponent->login()).arg(gameInfo).arg(role));
 }
@@ -142,7 +142,7 @@ void GameSession::sendFound(Client* receiver, Client* opponent, const QString& r
 void GameSession::sendGo(Client* player) const
 {
     player->send(QString("go:%1:%2:%3:")
-        .arg(game_->serializeForCurrentPlayer())
+        .arg(QString::fromStdString(game_->serializeForCurrentPlayer()))
         .arg(game_->movesRemaining())
         .arg(id_));
 }

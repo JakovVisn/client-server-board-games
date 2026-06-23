@@ -1,8 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <utility>
-#include <QString>
 
 class AbstractGame
 {
@@ -15,7 +15,7 @@ public:
 
     virtual ~AbstractGame() = default;
 
-    [[nodiscard]] virtual QString gameName() const = 0;
+    [[nodiscard]] virtual std::string gameName() const = 0;
     [[nodiscard]] virtual int boardWidth() const = 0;
     [[nodiscard]] virtual int boardHeight() const = 0;
     [[nodiscard]] virtual std::pair<int,int> defaultBoardSize() const = 0;
@@ -23,11 +23,11 @@ public:
     [[nodiscard]] virtual int movesRemaining() const = 0;
 
     [[nodiscard]] virtual bool isValidMove(int x, int y) const = 0;
-    [[nodiscard]] virtual QString applyMove(int x, int y) = 0;
+    [[nodiscard]] virtual std::string applyMove(int x, int y) = 0;
     [[nodiscard]] virtual TurnResult turnResult() const = 0;
 
-    [[nodiscard]] virtual QString serializeForCurrentPlayer() const = 0;
-    [[nodiscard]] virtual QString serializeForOpponent() const = 0;
+    [[nodiscard]] virtual std::string serializeForCurrentPlayer() const = 0;
+    [[nodiscard]] virtual std::string serializeForOpponent() const = 0;
 
     virtual void advanceTurn() = 0;
 

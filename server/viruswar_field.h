@@ -1,7 +1,7 @@
 #pragma once
 
-#include <QVector>
-#include <QString>
+#include <string>
+#include <vector>
 
 class VirusWarField
 {
@@ -28,16 +28,16 @@ public:
     [[nodiscard]] bool applyMove(int x, int y);
     [[nodiscard]] bool hasMovesForNextTurn(int movesPerTurn);
 
-    [[nodiscard]] QString serialize() const;
+    [[nodiscard]] std::string serialize() const;
 
 private:
     int width_;
     int height_;
     int moveIndex_;
-    QVector<Cell> cells_;
+    std::vector<Cell> cells_;
 
     [[nodiscard]] int cellIndex(int x, int y) const;
     [[nodiscard]] bool isInBounds(int x, int y) const;
-    [[nodiscard]] bool isConnectedToX(int x, int y, QVector<bool>& visited) const;
-    [[nodiscard]] bool canCompleteTurn(int& found, QVector<bool>& marked, int movesPerTurn);
+    [[nodiscard]] bool isConnectedToX(int x, int y, std::vector<bool>& visited) const;
+    [[nodiscard]] bool canCompleteTurn(int& found, std::vector<bool>& marked, int movesPerTurn);
 };

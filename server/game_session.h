@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <QString>
 #include "abstract_game.h"
 
 class AuthManager;
