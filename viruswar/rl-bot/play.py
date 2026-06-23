@@ -84,14 +84,17 @@ def get_promoted_models(promoted_dir: str) -> list[Path]:
 class BotSlot:
     """One bot instance: owns a connection, a model, and a game loop thread."""
 
+    _LOG_EVERY = 20  # log win rate every N games per slot
+
     def __init__(self, login: str, password: str, role: str,
-                 host: str, port: int, promoted_dir: str):
+                 host: str, port: int, promoted_dir: str, log_path: str = ""):
         self.login = login
         self.password = password
         self.role = role          # "latest" | "prev:N" | "random"
         self.host = host
         self.port = port
         self.promoted_dir = promoted_dir
+        self._log_path = log_path
 
         self._model = None
         self._model_path: str | None = None
@@ -100,6 +103,25 @@ class BotSlot:
         self._games_played = 0
         self._wins = 0
         self._infer_times: list[float] = []
+
+        self._slot_wins = 0
+        self._slot_games = 0
+        self._slot_model = ""
+
+        self._conn: ServerConnection | None = None
+        self._conn_lock = threading.Lock()
+
+    # ── logging ───────────────────────────────────────────────────────────
+
+    def _log(self, msg: str) -> None:
+        if not self._log_path:
+            return
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write(f"- `{ts}` {msg}\n")
+        except OSError:
+            pass
 
     # ── model management ──────────────────────────────────────────────────
 
@@ -126,6 +148,9 @@ class BotSlot:
             with self._model_lock:
                 self._model = new_model
                 self._model_path = str(path)
+            self._slot_wins = 0
+            self._slot_games = 0
+            self._slot_model = path.stem
             print(f"[{_ts()}][{self.login}] loaded {path.name}")
             return True
         except Exception as e:
@@ -135,6 +160,15 @@ class BotSlot:
     def check_reload(self):
         """Called by main thread when promoted folder changes."""
         self._try_load()
+
+    def interrupt(self):
+        """Close connection to unblock read_message() during shutdown."""
+        with self._conn_lock:
+            if self._conn:
+                try:
+                    self._conn.disconnect()
+                except Exception:
+                    pass
 
     # ── game loop ─────────────────────────────────────────────────────────
 
@@ -149,7 +183,9 @@ class BotSlot:
         if _shutdown_requested:
             return
 
-        conn = ServerConnection(self.host, self.port, self.login, self.password)
+        with self._conn_lock:
+            self._conn = ServerConnection(self.host, self.port, self.login, self.password)
+            conn = self._conn
         active: set[int] = set()
         game_sizes: dict[int, tuple[int, int]] = {}
 
@@ -157,7 +193,9 @@ class BotSlot:
             try:
                 conn.connect()
             except (ConnectionError, OSError) as e:
-                print(f"[{_ts()}][{self.login}] connect failed: {e}. Retry in 3s...")
+                msg = f"connect failed: {e}"
+                print(f"[{_ts()}][{self.login}] {msg}. Retry in 3s...")
+                self._log(f"play [{self.login}] reconnect  {msg}")
                 time.sleep(3)
                 continue
 
@@ -202,9 +240,16 @@ class BotSlot:
                         active.discard(int(m.group(1)))
                         self._games_played += 1
                         self._wins += 1
+                        self._slot_games += 1
+                        self._slot_wins += 1
                         print(f"[{_ts()}][{self.login}] WIN  "
                               f"wr={self._wins/self._games_played:.1%} "
                               f"({self._wins}/{self._games_played})")
+                        if self._slot_games % self._LOG_EVERY == 0:
+                            self._log(f"play [{self.login}/{self.role}] winrate"
+                                      f"  wr={self._slot_wins/self._slot_games:.1%}"
+                                      f"  games={self._slot_games}"
+                                      f"  model={self._slot_model}")
                         if _shutdown_requested and not active:
                             break
                         continue
@@ -213,9 +258,15 @@ class BotSlot:
                     if m:
                         active.discard(int(m.group(1)))
                         self._games_played += 1
+                        self._slot_games += 1
                         print(f"[{_ts()}][{self.login}] LOSS "
                               f"wr={self._wins/self._games_played:.1%} "
                               f"({self._wins}/{self._games_played})")
+                        if self._slot_games % self._LOG_EVERY == 0:
+                            self._log(f"play [{self.login}/{self.role}] winrate"
+                                      f"  wr={self._slot_wins/self._slot_games:.1%}"
+                                      f"  games={self._slot_games}"
+                                      f"  model={self._slot_model}")
                         if _shutdown_requested and not active:
                             break
                         continue
@@ -223,13 +274,17 @@ class BotSlot:
             except (ConnectionError, OSError) as e:
                 if _shutdown_requested:
                     break
-                print(f"[{_ts()}][{self.login}] lost: {e}. Reconnecting in 3s...")
+                msg = f"lost: {e}"
+                print(f"[{_ts()}][{self.login}] {msg}. Reconnecting in 3s...")
+                self._log(f"play [{self.login}] reconnect  {msg}")
                 conn.disconnect()
                 time.sleep(3)
             else:
                 break  # clean shutdown
 
         conn.disconnect()
+        with self._conn_lock:
+            self._conn = None
 
 
 def main():
@@ -238,6 +293,8 @@ def main():
     parser.add_argument("--port", type=int, default=int(os.getenv("VIRUSWAR_PORT", "1234")))
     parser.add_argument("--promoted-dir", default="models/promoted",
                         help="Folder containing promoted_*.zip files")
+    parser.add_argument("--log", default="models/training_log.md",
+                        help="Training log file to append play events to")
     parser.add_argument("--bot", action="append", dest="bots", default=[],
                         metavar="LOGIN:PASSWORD:ROLE",
                         help="Bot spec: login:password:latest | login:password:prev:N "
@@ -260,7 +317,7 @@ def main():
         login, password = parts[0], parts[1]
         role = ":".join(parts[2:])
         slots.append(BotSlot(login, password, role,
-                              args.host, args.port, args.promoted_dir))
+                              args.host, args.port, args.promoted_dir, args.log))
 
     os.makedirs(args.promoted_dir, exist_ok=True)
 
@@ -287,8 +344,10 @@ def main():
     except KeyboardInterrupt:
         pass
 
+    for s in slots:
+        s.interrupt()
     for t in threads:
-        t.join(timeout=30)
+        t.join(timeout=10)
     print(f"[{_ts()}][play] stopped.")
 
 

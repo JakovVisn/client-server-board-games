@@ -21,6 +21,7 @@ import torch.nn as nn
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
@@ -141,6 +142,7 @@ class RolloutLogCallback(BaseCallback):
         super().__init__()
         self._rollout_wins = []
         self._ep_rewards = []
+        self._ep_lens = []
         self._server_rt_ms = []
         self._logger = logger
         self._log_every = log_every
@@ -152,6 +154,7 @@ class RolloutLogCallback(BaseCallback):
                 self._rollout_wins.append(1 if info["game_won"] else 0)
             if "episode" in info:
                 self._ep_rewards.append(info["episode"]["r"])
+                self._ep_lens.append(info["episode"]["l"])
             if "server_rt_ms" in info:
                 self._server_rt_ms.append(info["server_rt_ms"])
         return True
@@ -163,10 +166,16 @@ class RolloutLogCallback(BaseCallback):
         win_rate = sum(self._rollout_wins) / len(self._rollout_wins)
         ep_rew_mean = (sum(self._ep_rewards) / len(self._ep_rewards)
                        if self._ep_rewards else 0.0)
+        ep_len_mean = (sum(self._ep_lens) / len(self._ep_lens)
+                       if self._ep_lens else 0.0)
         server_rt = (sum(self._server_rt_ms) / len(self._server_rt_ms)
                      if self._server_rt_ms else 0.0)
+        raw_ent = self.model.logger.name_to_value.get("train/entropy_loss")
+        entropy = -raw_ent if raw_ent is not None else None
+
         self._rollout_wins = []
         self._ep_rewards = []
+        self._ep_lens = []
         self._server_rt_ms = []
         self._iteration += 1
 
@@ -176,7 +185,8 @@ class RolloutLogCallback(BaseCallback):
               f"server_rt={server_rt:.1f}ms")
 
         if self._logger and self._iteration % self._log_every == 0:
-            self._logger.log_rollout(self.num_timesteps, win_rate, ep_rew_mean, server_rt)
+            self._logger.log_rollout(self.num_timesteps, win_rate, ep_rew_mean,
+                                     ep_len_mean, entropy, server_rt)
 
 
 _stop_count = 0
@@ -198,10 +208,10 @@ def mask_fn(env: VirusWarEnv) -> np.ndarray:
 
 def _env_factory(host: str, port: int,
                  credentials: list[tuple[str, str]],
-                 opponent: str):
+                 opponent: str, log_path: str):
     """Module-level factory so SubprocVecEnv can pickle it."""
-    env = VirusWarEnv(host, port, credentials, opponent=opponent)
-    return ActionMasker(env, mask_fn)
+    env = VirusWarEnv(host, port, credentials, opponent=opponent, log_path=log_path)
+    return Monitor(ActionMasker(env, mask_fn))
 
 
 def main():
@@ -242,7 +252,7 @@ def main():
     log_path = args.log or os.path.join(args.save_dir, "training_log.md")
     tlog = TrainingLogger(log_path)
 
-    make = partial(_env_factory, args.host, args.port, creds, args.opponent)
+    make = partial(_env_factory, args.host, args.port, creds, args.opponent, log_path)
     if args.n_envs > 1:
         env = SubprocVecEnv([make for _ in range(args.n_envs)])
     else:

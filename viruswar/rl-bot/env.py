@@ -39,7 +39,8 @@ class VirusWarEnv(gym.Env):
     def __init__(self, host: str, port: int,
                  credentials: list[tuple[str, str]],
                  opponent: str = "",
-                 board_w: int = 10, board_h: int = 10):
+                 board_w: int = 10, board_h: int = 10,
+                 log_path: str = ""):
         super().__init__()
         self._host = host
         self._port = port
@@ -48,6 +49,7 @@ class VirusWarEnv(gym.Env):
         self._connected = False
         self._client: ServerConnection | None = None
         self._login = "?"
+        self._log_path = log_path
 
         self.w = board_w
         self.h = board_h
@@ -71,8 +73,9 @@ class VirusWarEnv(gym.Env):
                 self._board, self._moves_remaining = self._wait_for_game()
                 return self._obs(), {}
             except (ConnectionError, OSError) as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] "
-                      f"Connection error: {e}. Retrying in 3s...")
+                msg = f"Connection error: {e}"
+                print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] {msg}. Retrying in 3s...")
+                self._log_reconnect(msg)
                 self._connected = False
                 if self._client:
                     self._client.disconnect()
@@ -84,8 +87,9 @@ class VirusWarEnv(gym.Env):
         try:
             return self._step(x, y)
         except (ConnectionError, OSError) as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] "
-                  f"Connection lost during step: {e}")
+            msg = f"Connection lost during step: {e}"
+            print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] {msg}")
+            self._log_reconnect(msg)
             self._connected = False
             if self._client:
                 self._client.disconnect()
@@ -148,6 +152,16 @@ class VirusWarEnv(gym.Env):
     # =========================================================
     # Connection
     # =========================================================
+
+    def _log_reconnect(self, msg: str) -> None:
+        if not self._log_path:
+            return
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write(f"- `{ts}` train [{self._login}] reconnect  {msg}\n")
+        except OSError:
+            pass
 
     def _try_connect(self):
         """Try credentials in order, skip accounts that are alreadyconnected."""
