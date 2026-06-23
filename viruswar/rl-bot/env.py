@@ -30,7 +30,7 @@ _RE_GO        = re.compile(r"go:([0-4]+):(\d+):(\d+):")
 # Bot protocol: field1:TYPE:X:Y:GAMEID:
 _RE_FIELD1    = re.compile(r"field1:\w+:-?\d+:-?\d+:\d+:")
 # Bot protocol: wrongstep:GAMEID:
-_RE_WRONGSTEP = re.compile(r"wrongstep:\d+:")
+_RE_WRONGSTEP = re.compile(r"wrongstep:(\d+):")
 
 
 class VirusWarEnv(gym.Env):
@@ -99,6 +99,7 @@ class VirusWarEnv(gym.Env):
     def _step(self, x: int, y: int):
         t0 = time.perf_counter()
         self._client.send_move(x, y, self._game_id)
+        gid = str(self._game_id)
 
         while True:
             msg = self._client.read_message()
@@ -109,21 +110,39 @@ class VirusWarEnv(gym.Env):
                     or msg == "wrongcmd:"):
                 continue
 
-            # wrongstep means game_logic.py and server disagree — log for debugging
-            if _RE_WRONGSTEP.match(msg):
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][env] WARNING: wrongstep")
-                continue
+            # wrongstep: server rejected the move and immediately re-sends go: — just wait for it
+            m = _RE_WRONGSTEP.match(msg)
+            if m:
+                if m.group(1) != gid:
+                    continue
+                ts = datetime.now().strftime("%H:%M:%S")
+                rows = [self._board[r*self.w:(r+1)*self.w] for r in range(self.h)]
+                board_str = "\n".join(f"  {''.join(row)}" for row in rows)
+                print(f"[{ts}][env] WARNING: wrongstep  move=({x},{y})  login={self._login}\n{board_str}")
+                if self._log_path:
+                    ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    try:
+                        with open(self._log_path, "a", encoding="utf-8") as f:
+                            f.write(f"- `{ts_full}` train [{self._login}] wrongstep"
+                                    f"  move=({x},{y})  board={self._board}\n")
+                    except OSError:
+                        pass
+                continue  # server sends go: right after wrongstep; read it and return normally
 
             rt_ms = (time.perf_counter() - t0) * 1000
 
             # go: our turn (next sub-move or after opponent's full turn)
             m = _RE_GO.match(msg)
             if m:
+                if m.group(3) != gid:
+                    continue
                 self._board = m.group(1)
                 self._moves_remaining = int(m.group(2))
                 return self._obs(), 0.0, False, False, {"server_rt_ms": rt_ms}
 
             if msg.startswith("win:"):
+                if msg.split(":")[1] != gid:
+                    continue
                 board_list = list(self._board)
                 board_list[y * self.w + x] = '3' if self._board[y * self.w + x] == '2' else '1'
                 self._board = ''.join(board_list)
@@ -132,9 +151,13 @@ class VirusWarEnv(gym.Env):
                 return self._obs(), 1.0 + bonus, True, False, {"game_won": True, "server_rt_ms": rt_ms}
 
             if msg.startswith("lose:"):
+                if msg.split(":")[1] != gid:
+                    continue
                 return self._obs(), -1.0, True, False, {"game_won": False, "server_rt_ms": rt_ms}
 
             if msg.startswith("abort:"):
+                if msg.split(":")[1] != gid:
+                    continue
                 return self._obs(), 0.0, False, True, {"server_rt_ms": rt_ms}
 
     def action_masks(self) -> np.ndarray:

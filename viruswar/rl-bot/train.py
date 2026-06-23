@@ -10,6 +10,7 @@ import sys
 from collections import deque
 from datetime import datetime
 from functools import partial
+from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -239,6 +240,13 @@ def main():
     parser.add_argument("--ent-coef", type=float,
                         default=float(os.getenv("VIRUSWAR_ENT_COEF", "0.05")))
     args = parser.parse_args()
+
+    if args.load is None:
+        checkpoints = sorted(Path(args.save_dir).glob("rl_bot_*_steps.zip"),
+                             key=lambda p: int(p.stem.split("_")[2]), reverse=True)
+        if checkpoints:
+            args.load = str(checkpoints[0])
+            print(f"Auto-loading latest checkpoint: {args.load}")
 
     target_kl = args.target_kl if args.target_kl != 0.0 else None
 
