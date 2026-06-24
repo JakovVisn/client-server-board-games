@@ -3,7 +3,8 @@ League inference script — runs multiple bot roles concurrently.
 Each bot loads its model from the promoted folder based on its role.
 
 Usage:
-    python play.py --promoted-dir models/promoted \
+    cd viruswar/rl-bot
+    ../.venv/bin/python play.py \
         --bot rlbot:rlbot:latest \
         --bot rlbot_prev_1:rlbot_prev_1:prev:1 \
         --bot rlbot_prev_2:rlbot_prev_2:prev:2 \
