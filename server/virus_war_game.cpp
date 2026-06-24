@@ -67,6 +67,28 @@ void VirusWarGame::advanceTurn()
     currentPlayer_ = 1 - currentPlayer_;
 }
 
+void VirusWarGame::initFromBoard(const std::string& board)
+{
+    // board is serialised from currentPlayer_'s perspective:
+    //   '1' = my cell (X), '2' = opponent cell (O),
+    //   '3' = my captured (CatchX), '4' = opponent captured (CatchO)
+    // Both fields are rebuilt; moveIndex_ stays 0 (start of turn).
+    const int me  = currentPlayer_;
+    const int opp = 1 - currentPlayer_;
+    for (int i = 0; i < width_ * height_; ++i) {
+        VirusWarField::Cell myCell, oppCell;
+        switch (board[i]) {
+        case '1': myCell = VirusWarField::Cell::X;      oppCell = VirusWarField::Cell::O;      break;
+        case '2': myCell = VirusWarField::Cell::O;      oppCell = VirusWarField::Cell::X;      break;
+        case '3': myCell = VirusWarField::Cell::CatchX; oppCell = VirusWarField::Cell::CatchO; break;
+        case '4': myCell = VirusWarField::Cell::CatchO; oppCell = VirusWarField::Cell::CatchX; break;
+        default:  myCell = VirusWarField::Cell::Clear;  oppCell = VirusWarField::Cell::Clear;  break;
+        }
+        fields_[me ].setCell(i % width_, i / width_, myCell);
+        fields_[opp].setCell(i % width_, i / width_, oppCell);
+    }
+}
+
 std::unique_ptr<AbstractGame> VirusWarGame::create(int w, int h) const
 {
     return std::make_unique<VirusWarGame>(w, h);

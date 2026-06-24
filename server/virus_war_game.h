@@ -28,6 +28,7 @@ public:
     [[nodiscard]] std::string serializeForOpponent() const override;
 
     void advanceTurn() override;
+    void initFromBoard(const std::string& board);
 
     [[nodiscard]] std::unique_ptr<AbstractGame> create(int w, int h) const override;
 

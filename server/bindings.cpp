@@ -27,6 +27,7 @@ PYBIND11_MODULE(viruswar_sim, m) {
         .def("serialize_opponent", &VirusWarGame::serializeForOpponent)
         .def("width",              &VirusWarGame::boardWidth)
         .def("height",             &VirusWarGame::boardHeight)
+        .def("init_from_board", &VirusWarGame::initFromBoard, py::arg("board"))
         .def("valid_moves", [](const VirusWarGame& g) {
             std::vector<std::pair<int,int>> moves;
             for (int y = 0; y < g.boardHeight(); ++y)
