@@ -21,7 +21,7 @@ import numpy as np
 from gymnasium import spaces
 
 from bot_client import ServerConnection
-from game_logic import valid_action_mask
+from viruswar_sim import valid_action_mask
 
 # Bot protocol: found:GAMEID:OPPONENT:GAMENAME:W:H:role:
 _RE_FOUND     = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")

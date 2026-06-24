@@ -34,7 +34,7 @@ from sb3_contrib import MaskablePPO
 load_dotenv()
 
 from bot_client import ServerConnection
-from game_logic import valid_action_mask
+from viruswar_sim import valid_action_mask
 
 
 _RE_FOUND = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
