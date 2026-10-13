@@ -5,7 +5,7 @@ Key design decisions:
   - Each sub-move is a separate tree node (VirusWar has 3 sub-moves per turn)
   - Network provides prior probabilities and value — no random rollouts
   - Q is stored from node.player's perspective; selection corrects for player switches
-  - Dirichlet noise added to root after first expansion (training only)
+  - Dirichlet noise added to the root of every move, reused subtrees included (training only)
 """
 
 import numpy as np
@@ -127,6 +127,17 @@ def run_mcts(root: MCTSNode,
     Returns:
         root (same object, visit counts updated)
     """
+    # Noise must hit every move's root, including subtrees reused from the
+    # previous move (those are already expanded), so expand the root up front.
+    if add_noise:
+        if not root.is_expanded():
+            (policy, v), mask = _evaluate(root, net)
+            root.expand(policy, mask)
+            root.N += 1
+            root.W += v
+        if root.children:
+            _add_dirichlet_noise(root, dirichlet_alpha, dirichlet_eps)
+
     for _ in range(n_sims):
         node = root
         path = [node]
@@ -142,10 +153,6 @@ def run_mcts(root: MCTSNode,
         else:
             (policy, v), mask = _evaluate(node, net)
             node.expand(policy, mask)
-
-            # Add Dirichlet noise to root once, right after its first expansion
-            if node is root and add_noise and root.children:
-                _add_dirichlet_noise(root, dirichlet_alpha, dirichlet_eps)
 
         # ── Backpropagation ───────────────────────────────────────────────────
         # v is from node.player's perspective.
