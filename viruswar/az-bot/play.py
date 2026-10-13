@@ -25,6 +25,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +41,9 @@ from net import AZNet, board_to_obs
 from training_logger import TrainingLogger
 
 N_SIMS = int(os.getenv("AZ_N_SIMS_PLAY", "400"))
+# A single move slower than this is logged: the server drops clients that stay
+# silent for INACTIVE_MAX_MS (5 min), so slow moves explain disconnects.
+SLOW_MOVE_SECS = float(os.getenv("AZ_SLOW_MOVE_SECS", "10"))
 
 _RE_FOUND = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
 _RE_GO    = re.compile(r"go:([0-4]+):(\d+):(\d+):")
@@ -75,13 +79,18 @@ def get_promoted_models(promoted_dir: str) -> list[Path]:
 # ── Per-game state ────────────────────────────────────────────────────────────
 
 class GameState:
-    __slots__ = ("game", "root", "w", "h")
+    __slots__ = ("game", "root", "w", "h", "opponent", "started", "moves", "think_secs", "models")
 
-    def __init__(self, w: int, h: int):
+    def __init__(self, w: int, h: int, opponent: str):
         self.w    = w
         self.h    = h
         self.game = sim.VirusWarGame(w, h)
         self.root: MCTSNode | None = None
+        self.opponent   = opponent
+        self.started    = time.monotonic()
+        self.moves      = 0      # sub-moves we played
+        self.think_secs = 0.0    # total MCTS time spent on this game
+        self.models: list[str] = []  # models that played it, in order (hot reload mid-game)
 
 
 # ── Bot slot ──────────────────────────────────────────────────────────────────
@@ -147,15 +156,17 @@ class BotSlot:
             new_net = AZNet.load(str(path))
             new_net.eval()
             with self._net_lock:
-                self._net      = new_net
-                self._net_path = str(path)
+                self._net        = new_net
+                self._net_path   = str(path)
+                self._slot_model = path.stem
             self._slot_wins  = 0
             self._slot_games = 0
-            self._slot_model = path.stem
             print(f"[{_ts()}][{self.login}] loaded {path.name}")
+            self._log(f"play [{self.login}/{self.role}] model_loaded  model={path.name}")
             return True
         except Exception as e:
             print(f"[{_ts()}][{self.login}] load failed: {e}")
+            self._log(f"play [{self.login}/{self.role}] model_load_failed  path={path}  error={e!r}")
             return False
 
     def check_reload(self):
@@ -178,8 +189,11 @@ class BotSlot:
             gs.root = make_root(gs.game)
 
         with self._net_lock:
-            net = self._net
+            net, model = self._net, self._slot_model
+        if not gs.models or gs.models[-1] != model:
+            gs.models.append(model)
 
+        t0 = time.perf_counter()
         run_mcts(gs.root, net, N_SIMS, add_noise=False)
         pi     = get_action_probs(gs.root, temperature=0)
         action = int(np.argmax(pi))
@@ -189,7 +203,24 @@ class BotSlot:
         gs.root = gs.root.children[action]
         gs.root.prior = 1.0
 
+        secs = time.perf_counter() - t0
+        gs.moves      += 1
+        gs.think_secs += secs
+        if secs > SLOW_MOVE_SECS:
+            self._log(f"play [{self.login}] slow_move  move={gs.moves}  time={secs:.1f}s"
+                      f"  sims={N_SIMS}")
         return action
+
+    def _log_result(self, game_id: int, gs: GameState | None, won: bool) -> None:
+        result = "win" if won else "loss"
+        if gs is None:
+            self._log(f"play [{self.login}/{self.role}] {result}  game={game_id}  (untracked game)")
+            return
+        avg_ms = gs.think_secs / gs.moves * 1000 if gs.moves else 0.0
+        self._log(f"play [{self.login}/{self.role}] {result}  game={game_id}"
+                  f"  opponent={gs.opponent}  my_moves={gs.moves}"
+                  f"  duration={time.monotonic() - gs.started:.0f}s  think_avg={avg_ms:.0f}ms"
+                  f"  model={'->'.join(gs.models) or self._slot_model}")
 
     # ── game loop ─────────────────────────────────────────────────────────
 
@@ -202,6 +233,9 @@ class BotSlot:
 
         if _shutdown_requested:
             return
+
+        self._log(f"play [{self.login}/{self.role}] slot_start  model={self._slot_model}"
+                  f"  sims={N_SIMS}  server={self.host}:{self.port}")
 
         with self._conn_lock:
             self._conn = ServerConnection(self.host, self.port, self.login, self.password)
@@ -219,7 +253,11 @@ class BotSlot:
                 time.sleep(3)
                 continue
 
+            if active:
+                self._log(f"play [{self.login}] dropped_games  count={len(active)}"
+                          f"  ids={sorted(active)}  (lost with the previous connection)")
             active.clear()
+            self._log(f"play [{self.login}] connected")
 
             try:
                 while True:
@@ -230,8 +268,10 @@ class BotSlot:
                         game_id = int(m.group(1))
                         w, h    = int(m.group(3)), int(m.group(4))
                         if not _shutdown_requested:
-                            active[game_id] = GameState(w, h)
+                            active[game_id] = GameState(w, h, m.group(2))
                             print(f"[{_ts()}][{self.login}] game {game_id} vs {m.group(2)}")
+                            self._log(f"play [{self.login}] game_start  game={game_id}"
+                                      f"  opponent={m.group(2)}  board={w}x{h}")
                         continue
 
                     m = _RE_GO.match(msg)
@@ -250,13 +290,14 @@ class BotSlot:
                         game_id_str = msg.split(":")[1]
                         active.pop(int(game_id_str), None)
                         print(f"[{_ts()}][{self.login}] abort game {game_id_str}")
+                        self._log(f"play [{self.login}] abort  game={game_id_str}")
                         if _shutdown_requested and not active:
                             break
                         continue
 
                     m = _RE_WIN.match(msg)
                     if m:
-                        active.pop(int(m.group(1)), None)
+                        self._log_result(int(m.group(1)), active.pop(int(m.group(1)), None), True)
                         self._games_played += 1
                         self._wins         += 1
                         self._slot_games   += 1
@@ -275,7 +316,7 @@ class BotSlot:
 
                     m = _RE_LOSE.match(msg)
                     if m:
-                        active.pop(int(m.group(1)), None)
+                        self._log_result(int(m.group(1)), active.pop(int(m.group(1)), None), False)
                         self._games_played += 1
                         self._slot_games   += 1
                         print(f"[{_ts()}][{self.login}] LOSS "
@@ -298,12 +339,22 @@ class BotSlot:
                 self._log(f"play [{self.login}] reconnect  {msg}")
                 conn.disconnect()
                 time.sleep(3)
+            except Exception:
+                # Bug in move selection etc.: record it instead of silently killing the thread
+                print(f"[{_ts()}][{self.login}] unexpected error, reconnecting in 3s")
+                traceback.print_exc()
+                self._log(f"play [{self.login}] error  reconnecting in 3s\n\n```\n"
+                          f"{traceback.format_exc()}```\n")
+                conn.disconnect()
+                time.sleep(3)
             else:
                 break
 
         conn.disconnect()
         with self._conn_lock:
             self._conn = None
+        self._log(f"play [{self.login}/{self.role}] slot_stop  games={self._games_played}"
+                  f"  wins={self._wins}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -313,7 +364,7 @@ def main():
     parser.add_argument("--host", default=os.getenv("VIRUSWAR_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("VIRUSWAR_PORT", "1234")))
     parser.add_argument("--promoted-dir", default="models/promoted")
-    parser.add_argument("--log", default="models/training_log_az.md")
+    parser.add_argument("--log", default="models/play_log_az.md")
     parser.add_argument("--bot", action="append", dest="bots", default=[],
                         metavar="LOGIN:PASSWORD:ROLE",
                         help="Bot spec: login:password:latest | login:password:prev:N "
@@ -338,6 +389,9 @@ def main():
                              args.host, args.port, args.promoted_dir, args.log))
 
     os.makedirs(args.promoted_dir, exist_ok=True)
+    TrainingLogger(args.log).log_line(
+        f"play start  bots={[s.login + '/' + s.role for s in slots]}"
+        f"  promoted_dir={args.promoted_dir}  sims={N_SIMS}")
 
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -346,7 +400,8 @@ def main():
     for t in threads:
         t.start()
 
-    last_snapshot: list[str] = []
+    # Slots load the newest model on start, so only later changes trigger a reload
+    last_snapshot = [str(p) for p in get_promoted_models(args.promoted_dir)]
     try:
         while True:
             time.sleep(5)
@@ -356,6 +411,9 @@ def main():
             if current != last_snapshot:
                 last_snapshot = current
                 print(f"[{_ts()}][play] promoted folder: {len(current)} models — reloading bots")
+                TrainingLogger(args.log).log_line(
+                    f"play promoted_changed  models={len(current)}"
+                    f"  newest={Path(current[0]).name if current else '-'}")
                 for s in slots:
                     s.check_reload()
     except KeyboardInterrupt:
@@ -366,6 +424,7 @@ def main():
     for t in threads:
         t.join(timeout=10)
     print(f"[{_ts()}][play] stopped.")
+    TrainingLogger(args.log).log_line("play stopped")
 
 
 if __name__ == "__main__":

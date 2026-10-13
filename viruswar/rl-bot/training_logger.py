@@ -56,6 +56,10 @@ class TrainingLogger:
             f"- `{self._ts()}` train session_end  step={step:,}  path={path}"
         )
 
+    def log_line(self, msg: str) -> None:
+        """Timestamped one-line event: `- `YYYY-MM-DD HH:MM:SS` msg`."""
+        self._append(f"- `{self._ts()}` {msg}")
+
     def log_note(self, note: str) -> None:
         """Programmatic manual note — also usable by Claude via direct file edit."""
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
