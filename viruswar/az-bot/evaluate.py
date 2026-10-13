@@ -102,7 +102,7 @@ def match(name: str, a: Player, b: Player, n_games: int, opening_moves: int,
 
 
 def value_check(name: str, net: AZNet, data, log: TrainingLogger) -> None:
-    line = value_metrics(net, *data)
+    line, _ = value_metrics(net, *data)
     log.log_line(f"eval value  {name}  {line}")
     print(f"  value: {line}")
 

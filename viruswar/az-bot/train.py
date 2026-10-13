@@ -4,10 +4,11 @@ AlphaZero training loop for VirusWar.
 Each iteration:
   1. Self-play  — N_SELF_PLAY games with MCTS, run in parallel worker processes
   2. Value check — the net's value head on the fresh (not yet trained-on) games
-  3. Train      — augmented mini-batches from the replay buffer; the number of
+  3. Buffer     — keep a random POSITION_KEEP fraction of each game's positions
+  4. Train      — augmented mini-batches from the replay buffer; the number of
                   steps follows the amount of new data (SAMPLE_REUSE)
-  4. Pit        — every EVAL_EVERY iters, evaluate net vs previous best (parallel)
-  5. Promote    — save to promoted/ if win rate >= PROMOTE_THRESHOLD
+  5. Pit        — every EVAL_EVERY iters, evaluate net vs previous best (parallel)
+  6. Promote    — save to promoted/ if win rate >= PROMOTE_THRESHOLD
 
 Auto-resumes from the latest checkpoint in --models-dir if no --load given.
 Saves an untrained seed model to promoted/ on first run if none exists.
@@ -49,15 +50,21 @@ N_SELF_PLAY       = int(os.getenv("AZ_SELF_PLAY_GAMES",    "40"))
 N_SIMS            = int(os.getenv("AZ_N_SIMS",             "200"))
 TEMPERATURE_MOVES = int(os.getenv("AZ_TEMPERATURE_MOVES",  "20"))
 
-# Training steps per iteration = new_positions * SAMPLE_REUSE / BATCH_SIZE,
-# i.e. each position is sampled ~SAMPLE_REUSE times while in the buffer.
+# Consecutive positions of a game are near-identical boards sharing one outcome,
+# so the value head can memorise "which game is this" instead of learning to
+# evaluate (AlphaGo hit the same problem and trained on one position per game).
+# Keeping a random fraction per game decorrelates the buffer.
+POSITION_KEEP     = float(os.getenv("AZ_POSITION_KEEP",    "0.25"))
+# Training steps per iteration = kept_positions * SAMPLE_REUSE / BATCH_SIZE,
+# i.e. each kept position is sampled ~SAMPLE_REUSE times while in the buffer.
 # The first run trained ~20x per position and memorised its games.
 SAMPLE_REUSE      = float(os.getenv("AZ_SAMPLE_REUSE",     "3"))
-MIN_BUFFER        = int(os.getenv("AZ_MIN_BUFFER",         "20000"))
+MIN_BUFFER        = int(os.getenv("AZ_MIN_BUFFER",         "10000"))
 BATCH_SIZE        = int(os.getenv("AZ_BATCH_SIZE",         "256"))
 BUFFER_SIZE       = int(os.getenv("AZ_BUFFER_SIZE",        "200000"))
 LR                = float(os.getenv("AZ_LR",               "1e-3"))
 WEIGHT_DECAY      = float(os.getenv("AZ_WEIGHT_DECAY",     "1e-4"))
+VALUE_LOSS_WEIGHT = float(os.getenv("AZ_VALUE_LOSS_WEIGHT","0.25"))
 
 EVAL_EVERY        = int(os.getenv("AZ_EVAL_EVERY",         "5"))
 N_PIT_GAMES       = int(os.getenv("AZ_PIT_GAMES",          "100"))
@@ -177,14 +184,15 @@ def _train(args, logger: TrainingLogger) -> None:
     logger.log_note(
         f"az-bot session start  loaded={load_path or 'scratch'}  workers={N_WORKERS}"
         f"  self_play={N_SELF_PLAY}  n_sims={N_SIMS}  temp_moves={TEMPERATURE_MOVES}"
-        f"  sample_reuse={SAMPLE_REUSE}  min_buffer={MIN_BUFFER}  batch={BATCH_SIZE}"
-        f"  buffer={BUFFER_SIZE}  lr={LR}  weight_decay={WEIGHT_DECAY}"
+        f"  position_keep={POSITION_KEEP}  sample_reuse={SAMPLE_REUSE}"
+        f"  min_buffer={MIN_BUFFER}  batch={BATCH_SIZE}  buffer={BUFFER_SIZE}"
+        f"  lr={LR}  weight_decay={WEIGHT_DECAY}  value_loss_weight={VALUE_LOSS_WEIGHT}"
         f"  eval_every={EVAL_EVERY}  pit_games={N_PIT_GAMES}  pit_sims={N_SIMS_PIT}"
         f"  pit_opening={PIT_OPENING_MOVES}  promote={PROMOTE_THRESHOLD}"
         f"  value_check_positions={len(value_data[1])}  save_every={SAVE_EVERY}"
     )
     net.eval()
-    logger.log_line(f"train value_random  iter=0  {value_metrics(net, *value_data)}")
+    logger.log_line(f"train value_random  iter=0  {value_metrics(net, *value_data)[0]}")
 
     store = NetStore()
     executor = make_executor(N_WORKERS)
@@ -225,10 +233,12 @@ def _train(args, logger: TrainingLogger) -> None:
             fresh_obs = torch.from_numpy(np.stack([ex[0] for ex in examples]))
             fresh_z = np.array([ex[2] for ex in examples])
             fresh_phase = np.concatenate([np.arange(n) / n for n in lengths])
-            logger.log_line(f"train value_fresh  iter={iteration}"
-                            f"  {value_metrics(net, fresh_obs, fresh_z, fresh_phase)}")
+            fresh_line, fresh_mse = value_metrics(net, fresh_obs, fresh_z, fresh_phase)
+            logger.log_line(f"train value_fresh  iter={iteration}  {fresh_line}")
 
-            replay_buffer.extend(examples)
+            # ── 3. Buffer: keep a random fraction of every game's positions ───
+            kept = [ex for ex in examples if rng.random() < POSITION_KEEP]
+            replay_buffer.extend(kept)
             if len(replay_buffer) > BUFFER_SIZE:
                 del replay_buffer[:len(replay_buffer) - BUFFER_SIZE]
 
@@ -238,8 +248,8 @@ def _train(args, logger: TrainingLogger) -> None:
                                 f"  buffer={len(replay_buffer)} < min_buffer={MIN_BUFFER}")
                 continue
 
-            # ── 3. Train ──────────────────────────────────────────────────────
-            n_steps = max(1, math.ceil(len(examples) * SAMPLE_REUSE / BATCH_SIZE))
+            # ── 4. Train ──────────────────────────────────────────────────────
+            n_steps = max(1, math.ceil(len(kept) * SAMPLE_REUSE / BATCH_SIZE))
             net.train()
             total_loss = total_ploss = total_vloss = 0.0
 
@@ -249,7 +259,7 @@ def _train(args, logger: TrainingLogger) -> None:
                 log_p, v = net(obs)
                 policy_loss = -(pi * log_p).sum(dim=-1).mean()
                 value_loss  = F.mse_loss(v.squeeze(-1), z)
-                loss        = policy_loss + value_loss
+                loss        = policy_loss + VALUE_LOSS_WEIGHT * value_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -265,24 +275,28 @@ def _train(args, logger: TrainingLogger) -> None:
             avg_vloss = total_vloss / n_steps
             print(f"[train] loss={avg_loss:.4f}  "
                   f"policy={avg_ploss:.4f}  value={avg_vloss:.4f}")
+            # v_loss (games already trained on) far below fresh_v_mse (this
+            # iteration's games, measured before training) = memorising outcomes.
             logger.log_note(
                 f"az-bot iter={iteration}  games={total_games:,}"
                 f"  loss={avg_loss:.4f}  p_loss={avg_ploss:.4f}  v_loss={avg_vloss:.4f}"
-                f"  steps={n_steps}  buffer={len(replay_buffer)}  train_time={train_secs:.0f}s"
+                f"  fresh_v_mse={fresh_mse:.4f}  gap={fresh_mse - avg_vloss:+.4f}"
+                f"  steps={n_steps}  kept={len(kept)}/{len(examples)}"
+                f"  buffer={len(replay_buffer)}  train_time={train_secs:.0f}s"
             )
 
-            # ── 4. Save checkpoint ────────────────────────────────────────────
+            # ── 5. Save checkpoint ────────────────────────────────────────────
             if iteration % SAVE_EVERY == 0:
                 ckpt = os.path.join(args.models_dir, f"az_{total_games:010d}.pt")
                 net.save(ckpt)
                 print(f"[train] saved → {ckpt}")
                 logger.log_line(f"train checkpoint  games={total_games:,}  path={ckpt}")
 
-            # ── 5. Pit vs best ────────────────────────────────────────────────
+            # ── 6. Pit vs best ────────────────────────────────────────────────
             if iteration % EVAL_EVERY == 0:
                 net.eval()
                 logger.log_line(f"train value_random  iter={iteration}"
-                                f"  {value_metrics(net, *value_data)}")
+                                f"  {value_metrics(net, *value_data)[0]}")
                 print(f"[train] pit vs checkpoint at games={best_games:,}"
                       f"  ({N_PIT_GAMES} games, {N_SIMS_PIT} sims each)...")
 

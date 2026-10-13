@@ -50,8 +50,14 @@ def value_dataset(n_games: int, rng: random.Random,
     return torch.from_numpy(np.stack(obs)), np.array(z), np.array(phase)
 
 
-def value_metrics(net: AZNet, obs: torch.Tensor, z: np.ndarray, phase: np.ndarray) -> str:
-    """One-line summary of value quality; net must be in eval mode."""
+def value_metrics(net: AZNet, obs: torch.Tensor, z: np.ndarray,
+                  phase: np.ndarray) -> tuple[str, float]:
+    """
+    Value quality on (obs, z); net must be in eval mode.
+
+    Returns:
+        (one-line summary, mse) — mse above 1.0 is worse than always predicting 0.
+    """
     with torch.no_grad():  # chunked: tens of thousands of positions at once would need GBs
         v = torch.cat([net(chunk)[1].squeeze(-1) for chunk in obs.split(4096)]).numpy()
     parts = []
@@ -63,4 +69,5 @@ def value_metrics(net: AZNet, obs: torch.Tensor, z: np.ndarray, phase: np.ndarra
         corr = np.corrcoef(v[m], z[m])[0, 1] if v[m].std() > 0 and z[m].std() > 0 else float("nan")
         parts.append(f"phase {lo:.1f}-{min(hi, 1.0):.1f}: sign_acc={acc:.2f} corr={corr:+.2f}"
                      f" mean|v|={np.abs(v[m]).mean():.2f}")
-    return f"mse={np.mean((v - z) ** 2):.3f}  " + "  |  ".join(parts)
+    mse = float(np.mean((v - z) ** 2))
+    return f"mse={mse:.3f}  " + "  |  ".join(parts), mse
