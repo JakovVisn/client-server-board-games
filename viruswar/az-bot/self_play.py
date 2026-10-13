@@ -24,10 +24,11 @@ def play_game(
     """
     Play one complete self-play game.
 
-    Temperature schedule:
+    Temperature schedule (move selection only):
       - First `temperature_moves` sub-moves: τ=1 (sample proportionally to visit counts)
       - Remaining moves: τ=0 (argmax — deterministic)
     This ensures early game diversity while late game is optimal.
+    The policy target is always the τ=1 visit distribution.
 
     Returns:
         (examples, winner) where examples is a list of (obs, pi, z) in move order:
@@ -50,15 +51,18 @@ def play_game(
                  dirichlet_eps=dirichlet_eps,
                  add_noise=True)
 
-        temperature = 1.0 if move_count < temperature_moves else 0.0
-        pi = get_action_probs(root, temperature=temperature)
+        # The training target is always the full visit distribution; temperature
+        # only picks the move to play. Storing the τ=0 one-hot as the target
+        # taught a collapsed prior that blinded the search.
+        pi = get_action_probs(root, temperature=1.0)
+        play_pi = pi if move_count < temperature_moves else get_action_probs(root, temperature=0)
 
         g = root.game
         obs = board_to_obs(g.serialize(), g.moves_remaining(), g.width(), g.height())
         history.append((obs, pi, root.player))
 
         # Sample or pick action from policy
-        action = int(np.random.choice(len(pi), p=pi))
+        action = int(np.random.choice(len(play_pi), p=play_pi))
         move_count += 1
 
         # Tree reuse: descend into selected child

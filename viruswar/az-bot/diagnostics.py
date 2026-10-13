@@ -1,5 +1,5 @@
 """
-Value-head diagnostics shared by train.py and evaluate.py.
+Value- and policy-head diagnostics shared by train.py and evaluate.py.
 
 A useful value head predicts the eventual winner, at least late in the game.
 value_metrics() reports, per game phase, how often sign(v) matches the outcome
@@ -71,3 +71,22 @@ def value_metrics(net: AZNet, obs: torch.Tensor, z: np.ndarray,
                      f" mean|v|={np.abs(v[m]).mean():.2f}")
     mse = float(np.mean((v - z) ** 2))
     return f"mse={mse:.3f}  " + "  |  ".join(parts), mse
+
+
+def policy_metrics(net: AZNet, obs: torch.Tensor, pi: np.ndarray) -> str:
+    """
+    Policy head vs MCTS visit-distribution targets; net must be in eval mode.
+
+    net_max_p near 1 with target_entropy well above net_entropy means the prior
+    has collapsed onto single moves and will starve the search of exploration.
+    """
+    with torch.no_grad():
+        log_p = torch.cat([net(chunk)[0] for chunk in obs.split(4096)])
+    p = log_p.exp()
+    t = torch.from_numpy(pi)
+    net_entropy = -(p * log_p).sum(-1).mean().item()
+    target_entropy = -(t * torch.log(t.clamp_min(1e-12))).sum(-1).mean().item()
+    xent = -(t * log_p).sum(-1).mean().item()
+    top1 = (log_p.argmax(-1) == t.argmax(-1)).float().mean().item()
+    return (f"p_loss={xent:.3f}  net_entropy={net_entropy:.2f}  target_entropy={target_entropy:.2f}"
+            f"  net_max_p={p.max(-1).values.mean().item():.2f}  top1_agree={top1:.2f}")

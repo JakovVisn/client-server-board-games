@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from diagnostics import value_dataset, value_metrics
+from diagnostics import policy_metrics, value_dataset, value_metrics
 from net import AZNet
 from parallel import NetStore, make_executor, run_pit, run_self_play
 from symmetry import augment, check_symmetries
@@ -235,6 +235,9 @@ def _train(args, logger: TrainingLogger) -> None:
             fresh_phase = np.concatenate([np.arange(n) / n for n in lengths])
             fresh_line, fresh_mse = value_metrics(net, fresh_obs, fresh_z, fresh_phase)
             logger.log_line(f"train value_fresh  iter={iteration}  {fresh_line}")
+            fresh_pi = np.stack([ex[1] for ex in examples])
+            logger.log_line(f"train policy_fresh  iter={iteration}"
+                            f"  {policy_metrics(net, fresh_obs, fresh_pi)}")
 
             # ── 3. Buffer: keep a random fraction of every game's positions ───
             kept = [ex for ex in examples if rng.random() < POSITION_KEEP]
