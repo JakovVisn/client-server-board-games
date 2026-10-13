@@ -1,12 +1,13 @@
 """
-Self-play data generation for AlphaZero VirusWar.
+Single-game building blocks for AlphaZero VirusWar: self-play and match games.
 
-Two MCTS instances sharing one network play against each other.
-Each position yields one training example: (obs, pi, z).
+Games are run in worker processes by parallel.py. Openings are passed around
+as action lists because VirusWarGame objects cannot be pickled.
 """
 
 import numpy as np
 import viruswar_sim as sim
+from viruswar_sim import TurnResult
 
 from net import AZNet, board_to_obs
 from mcts import make_root, run_mcts, get_action_probs
@@ -19,7 +20,7 @@ def play_game(
     c_puct: float = 1.5,
     dirichlet_alpha: float = 0.3,
     dirichlet_eps: float = 0.25,
-) -> list[tuple[np.ndarray, np.ndarray, float]]:
+) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], int]:
     """
     Play one complete self-play game.
 
@@ -29,10 +30,11 @@ def play_game(
     This ensures early game diversity while late game is optimal.
 
     Returns:
-        List of (obs, pi, z) where:
+        (examples, winner) where examples is a list of (obs, pi, z) in move order:
           obs: (6, H, W) float32  — board state from the moving player's view
           pi:  (H*W,)   float32  — MCTS visit count distribution (policy target)
           z:   float             — game outcome: +1.0 win, -1.0 loss (from obs player's view)
+        and winner is the player (0 or 1) who won.
     """
     game = sim.VirusWarGame()
     root = make_root(game)
@@ -68,83 +70,70 @@ def play_game(
             break
 
     # Assign z retrospectively: +1 for the winner's positions, -1 for the loser's
-    return [
+    examples = [
         (obs, pi, 1.0 if player == winner else -1.0)
         for obs, pi, player in history
     ]
+    return examples, winner
 
 
-def self_play(
-    net: AZNet,
-    n_games: int,
-    n_sims: int = 200,
-    temperature_moves: int = 20,
-    c_puct: float = 1.5,
-    dirichlet_alpha: float = 0.3,
-    dirichlet_eps: float = 0.25,
-    verbose: bool = True,
-) -> list[tuple[np.ndarray, np.ndarray, float]]:
+def _apply(game: sim.VirusWarGame, action: int) -> bool:
+    """Apply one sub-move, advancing the turn when needed. Returns True on game over."""
+    game.apply_move(action % game.width(), action // game.width())
+    tr = game.turn_result()
+    if tr == TurnResult.TurnComplete:
+        game.advance_turn()
+    return tr == TurnResult.GameOver
+
+
+def random_opening_actions(n_moves: int, rng: np.random.Generator) -> list[int]:
+    """Up to n_moves uniformly random legal sub-moves from the initial position."""
+    game = sim.VirusWarGame()
+    actions = []
+    for _ in range(n_moves):
+        moves = game.valid_moves()
+        x, y = moves[rng.integers(len(moves))]
+        action = y * game.width() + x
+        actions.append(action)
+        if _apply(game, action):
+            break
+    return actions
+
+
+def replay_opening(actions: list[int]) -> sim.VirusWarGame:
+    """Rebuild the position reached by an action list from random_opening_actions()."""
+    game = sim.VirusWarGame()
+    for action in actions:
+        _apply(game, action)
+    return game
+
+
+def random_opening(n_moves: int, rng: np.random.Generator) -> sim.VirusWarGame:
+    """Position after n_moves uniformly random legal sub-moves."""
+    return replay_opening(random_opening_actions(n_moves, rng))
+
+
+def play_match(game: sim.VirusWarGame, nets: list[AZNet],
+               n_sims: int, c_puct: float = 1.5) -> tuple[int, int]:
     """
-    Play n_games self-play games and return all training examples.
+    Play greedy MCTS from `game` with nets[p] moving for player p.
 
     Returns:
-        Flat list of (obs, pi, z) from all games.
+        (winner, number of sub-moves played)
     """
-    buffer: list[tuple[np.ndarray, np.ndarray, float]] = []
-    for i in range(n_games):
-        examples = play_game(
-            net,
-            n_sims=n_sims,
-            temperature_moves=temperature_moves,
-            c_puct=c_puct,
-            dirichlet_alpha=dirichlet_alpha,
-            dirichlet_eps=dirichlet_eps,
-        )
-        buffer.extend(examples)
-        if verbose:
-            print(f"  [{i + 1}/{n_games}] {len(examples)} positions")
-    return buffer
-
-
-def pit(
-    net_a: AZNet,
-    net_b: AZNet,
-    n_games: int,
-    n_sims: int = 400,
-    c_puct: float = 1.5,
-) -> float:
-    """
-    Evaluate net_a vs net_b by playing n_games deterministic games.
-
-    net_a plays as player 0 for the first half of games,
-    then as player 1 for the second half (to remove first-mover advantage).
-
-    Returns:
-        Win rate of net_a (0.0 – 1.0).
-    """
-    wins = 0
-
-    for i in range(n_games):
-        # Alternate who plays as player 0
-        first, second = (net_a, net_b) if i % 2 == 0 else (net_b, net_a)
-        net_a_is_player = 0 if i % 2 == 0 else 1
-
-        game = sim.VirusWarGame()
-        nets = [first, second]
-        root = make_root(game)
-
-        while True:
-            current_net = nets[root.player]
-            run_mcts(root, current_net, n_sims, c_puct=c_puct, add_noise=False)
-            pi = get_action_probs(root, temperature=0)
-            action = int(np.argmax(pi))
-
-            root = root.children[action]
+    root = make_root(game)
+    sub_moves = 0
+    while True:
+        run_mcts(root, nets[root.player], n_sims, c_puct=c_puct, add_noise=False)
+        action = int(np.argmax(get_action_probs(root, temperature=0)))
+        child = root.children[action]
+        sub_moves += 1
+        if child.terminal:
+            return child.player, sub_moves
+        if child.player == root.player:
+            # Same net keeps moving: reuse its subtree
+            root = child
             root.prior = 1.0
-
-            if root.terminal:
-                if root.player == net_a_is_player:
-                    wins += 1
-                break
-
-    return wins / n_games
+        else:
+            # Never let one net search inside a tree built by the other
+            root = make_root(child.game)
