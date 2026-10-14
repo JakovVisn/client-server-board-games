@@ -10,7 +10,9 @@ Each iteration:
   5. Pit        — every EVAL_EVERY iters, evaluate net vs previous best (parallel)
   6. Promote    — save to promoted/ if win rate >= PROMOTE_THRESHOLD
 
-Auto-resumes from the latest checkpoint in --models-dir if no --load given.
+Auto-resumes from the latest checkpoint in --models-dir if no --load given,
+restoring the replay buffer and optimizer from train_state.pt when it matches
+that checkpoint. The pit opponent is always the newest promoted model.
 Saves an untrained seed model to promoted/ on first run if none exists.
 
 Usage:
@@ -94,6 +96,62 @@ def _latest_checkpoint(models_dir: str) -> str | None:
     return str(pts[0]) if pts else None
 
 
+def _games_in_name(path: str) -> int:
+    """Games count encoded in az_NNNNNNNNNN.pt / promoted_NNNNNNNNNN.pt."""
+    try:
+        return int(Path(path).stem.split("_")[-1])
+    except ValueError:
+        return 0
+
+
+def _save_state(path: str, games: int, optimizer: torch.optim.Optimizer, buffer: list) -> None:
+    """
+    Replay buffer + optimizer, so a restart does not re-warm the buffer.
+
+    Observations are stored as cell codes (argmax of the 5 one-hot channels)
+    plus moves remaining, ~25x smaller than the float planes; decoding is exact.
+    """
+    if not buffer:
+        return
+    state = {
+        "games":     games,
+        "optimizer": optimizer.state_dict(),
+        "cells":     torch.from_numpy(np.stack([ex[0][:5].argmax(axis=0) for ex in buffer])
+                                      .astype(np.uint8)),
+        "moves":     torch.tensor([round(float(ex[0][5, 0, 0]) * 3) for ex in buffer],
+                                  dtype=torch.uint8),
+        "pi":        torch.from_numpy(np.stack([ex[1] for ex in buffer])),
+        "z":         torch.tensor([ex[2] for ex in buffer], dtype=torch.float32),
+    }
+    tmp = path + ".tmp"
+    torch.save(state, tmp)
+    os.replace(tmp, path)  # never leave a half-written state behind
+
+
+def _load_state(path: str, games: int, optimizer: torch.optim.Optimizer) -> list | None:
+    """Restore what _save_state wrote, or None if it is missing or from another checkpoint."""
+    if not os.path.exists(path):
+        return None
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    if state["games"] != games:
+        return None
+    # Keep this run's lr / weight decay (.env may have changed) over the saved ones
+    hyper = [{k: g[k] for k in ("lr", "weight_decay")} for g in optimizer.param_groups]
+    optimizer.load_state_dict(state["optimizer"])
+    for g, h in zip(optimizer.param_groups, hyper):
+        g.update(h)
+    cells, moves = state["cells"].numpy(), state["moves"].numpy()
+    pi, z = state["pi"].numpy(), state["z"].numpy()
+    buffer = []
+    for i in range(len(z)):
+        obs = np.zeros((6, *cells.shape[1:]), dtype=np.float32)
+        for c in range(5):
+            obs[c] = cells[i] == c
+        obs[5] = moves[i] / 3.0  # same expression as board_to_obs
+        buffer.append((obs, pi[i], float(z[i])))
+    return buffer
+
+
 def _promote(net: AZNet, step: int, win_rate: float,
              promoted_dir: str, logger: TrainingLogger) -> None:
     os.makedirs(promoted_dir, exist_ok=True)
@@ -159,30 +217,30 @@ def _train(args, logger: TrainingLogger) -> None:
         net = AZNet()
         print("[train] starting from scratch")
 
-    # Infer total_games from checkpoint filename (az_NNNNNNNNNN.pt)
-    total_games = 0
-    if load_path:
-        try:
-            total_games = int(Path(load_path).stem.split("_")[-1])
-        except ValueError:
-            pass
+    total_games = _games_in_name(load_path) if load_path else 0
 
     optimizer = torch.optim.Adam(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     # Plain list, not deque: random.sample indexes into the middle, which is O(n) on a deque
-    replay_buffer: list = []
+    state_path = os.path.join(args.models_dir, "train_state.pt")
+    replay_buffer = (_load_state(state_path, total_games, optimizer) if load_path else None) or []
+    logger.log_line(f"train resume_state  buffer={len(replay_buffer)}"
+                    f"  optimizer={'restored' if replay_buffer else 'fresh'}")
 
     # Seed promoted/ with the untrained model if the folder is empty
     promoted_path = Path(args.promoted_dir)
     if not any(promoted_path.glob("promoted_*.pt")) if promoted_path.exists() else True:
         _promote(net, total_games, 0.0, args.promoted_dir, logger)
 
-    # best_net is the snapshot we pit against; starts as the loaded (or fresh) model.
+    # best_net is the snapshot we pit against: the newest promoted model, which on a
+    # resume can be stronger than the checkpoint we continue from.
     # It only ever runs inference, so keep it in eval mode (BatchNorm running stats).
-    best_net   = copy.deepcopy(net).eval()
-    best_games = total_games
+    best_file  = max(promoted_path.glob("promoted_*.pt"), key=lambda p: p.stem)
+    best_net   = AZNet.load(str(best_file)).eval()
+    best_games = _games_in_name(str(best_file))
 
     logger.log_note(
-        f"az-bot session start  loaded={load_path or 'scratch'}  workers={N_WORKERS}"
+        f"az-bot session start  loaded={load_path or 'scratch'}  best={best_file.name}"
+        f"  workers={N_WORKERS}"
         f"  self_play={N_SELF_PLAY}  n_sims={N_SIMS}  temp_moves={TEMPERATURE_MOVES}"
         f"  position_keep={POSITION_KEEP}  sample_reuse={SAMPLE_REUSE}"
         f"  min_buffer={MIN_BUFFER}  batch={BATCH_SIZE}  buffer={BUFFER_SIZE}"
@@ -292,8 +350,10 @@ def _train(args, logger: TrainingLogger) -> None:
             if iteration % SAVE_EVERY == 0:
                 ckpt = os.path.join(args.models_dir, f"az_{total_games:010d}.pt")
                 net.save(ckpt)
+                _save_state(state_path, total_games, optimizer, replay_buffer)
                 print(f"[train] saved → {ckpt}")
-                logger.log_line(f"train checkpoint  games={total_games:,}  path={ckpt}")
+                logger.log_line(f"train checkpoint  games={total_games:,}  path={ckpt}"
+                                f"  buffer={len(replay_buffer)}")
 
             # ── 6. Pit vs best ────────────────────────────────────────────────
             if iteration % EVAL_EVERY == 0:
@@ -335,6 +395,7 @@ def _train(args, logger: TrainingLogger) -> None:
     # ── Shutdown ──────────────────────────────────────────────────────────────
     ckpt = os.path.join(args.models_dir, f"az_{total_games:010d}.pt")
     net.save(ckpt)
+    _save_state(state_path, total_games, optimizer, replay_buffer)
     logger.log_session_end(total_games, ckpt)
     print(f"[train] stopped. Final checkpoint: {ckpt}")
 
