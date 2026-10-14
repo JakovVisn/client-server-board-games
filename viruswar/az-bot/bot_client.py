@@ -1,1 +1,1 @@
-../rl-bot/bot_client.py
+../common/bot_client.py
