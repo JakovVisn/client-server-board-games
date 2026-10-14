@@ -40,6 +40,7 @@ private:
     QString opponent_;
     int movesLeft_ = 0;
     bool opponentTurnActive_ = false;
+    bool keepFinalBoard_ = false;  // game over: board stays until the result dialog is closed
 
     // Last connection params
     QString lastHost_     = "127.0.0.1";

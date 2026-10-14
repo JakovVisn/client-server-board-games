@@ -176,9 +176,14 @@ void MainWindow::setupNetwork()
     });
 
     connect(network_, &NetworkClient::gameOver, this, [this](bool won) {
+        // Disconnecting resets the board; keep the final moves visible until OK
+        keepFinalBoard_ = true;
         boardWidget_->setInteractive(false);
         network_->disconnectFromServer();
         QMessageBox::information(this, "Game over", won ? "You win!" : "You lose.");
+        keepFinalBoard_ = false;
+        gameState_.reset(boardWidth_, boardHeight_);
+        boardWidget_->update();
     });
 
     connect(network_, &NetworkClient::errorOccurred, this, [this](const QString& msg) {
@@ -237,8 +242,10 @@ void MainWindow::onDisconnectClicked()
 void MainWindow::setAppState(AppState state)
 {
     if (state == AppState::Disconnected) {
-        gameState_.reset(boardWidth_, boardHeight_);
-        boardWidget_->update();
+        if (!keepFinalBoard_) {
+            gameState_.reset(boardWidth_, boardHeight_);
+            boardWidget_->update();
+        }
         opponent_.clear();
         opponentTurnActive_ = false;
     }
