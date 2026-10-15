@@ -13,12 +13,18 @@ processes; stop training first or both will fight over the CPU.
 Results go to --log: one line per opponent with win rate, 95% interval and
 the implied Elo difference, then a summary table.
 
+Any player can also be an RL bot model (rl-bot promoted_*.zip): it plays its
+policy's best legal move, without search, as rl-bot/play.py does. With an RL
+--model and no --opponents, the opponents are picked from its own folder.
+
 Usage:
     cd viruswar/az-bot
     ../.venv/bin/python ladder.py                          # newest promoted vs auto-picked opponents
     ../.venv/bin/python ladder.py --games 100 --picks 4
     ../.venv/bin/python ladder.py --model models/checkpoints/az_0000012600.pt \\
         --opponents random models/promoted/promoted_0000006200.pt
+    ../.venv/bin/python ladder.py --model ../rl-bot/models/promoted/promoted_0048354848.zip \\
+        --opponents random models/promoted/promoted_0000021400.pt
 """
 
 import argparse
@@ -36,7 +42,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from mcts import get_action_probs, make_root, run_mcts
-from net import AZNet
+from net import AZNet, board_to_obs
 from parallel import make_executor
 from self_play import _apply, random_opening_actions, replay_opening
 from training_logger import TrainingLogger
@@ -46,9 +52,9 @@ RANDOM = "random"
 
 # ── Opponent selection ────────────────────────────────────────────────────────
 
-def promoted_models(promoted_dir: str) -> list[Path]:
-    """Promoted models, oldest first."""
-    return sorted(Path(promoted_dir).glob("promoted_*.pt"), key=lambda p: p.stem)
+def promoted_models(promoted_dir: str | Path, suffix: str = ".pt") -> list[Path]:
+    """Promoted models (AZ .pt or RL .zip), oldest first."""
+    return sorted(Path(promoted_dir).glob(f"promoted_*{suffix}"), key=lambda p: p.stem)
 
 
 def pick_opponents(target: Path, promoted: list[Path], picks: int) -> list[str]:
@@ -61,8 +67,15 @@ def pick_opponents(target: Path, promoted: list[Path], picks: int) -> list[str]:
     return [RANDOM] + [str(older[i]) for i in idx]
 
 
-def _name(opponent: str) -> str:
-    return opponent if opponent == RANDOM else Path(opponent).stem
+def _is_rl(path: str | Path) -> bool:
+    return Path(path).suffix == ".zip"
+
+
+def _name(player: str | Path) -> str:
+    """'random', the AZ model's stem, or 'rl:' + the RL model's stem."""
+    if player == RANDOM:
+        return RANDOM
+    return ("rl:" if _is_rl(player) else "") + Path(player).stem
 
 
 # ── Statistics ────────────────────────────────────────────────────────────────
@@ -83,21 +96,39 @@ def elo_diff(win_rate: float, n: int) -> float:
 
 # ── Worker side ───────────────────────────────────────────────────────────────
 
-_nets: dict[str, AZNet] = {}
+_nets: dict[str, object] = {}
 
 
-def _load(path: str) -> AZNet:
+def _load(path: str):
+    """AZNet for a .pt file, MaskablePPO for an RL .zip file (cached per worker)."""
     net = _nets.get(path)
     if net is None:
-        net = _nets[path] = AZNet.load(path).eval()
+        if _is_rl(path):
+            from sb3_contrib import MaskablePPO  # only needed when an RL model plays
+            net = MaskablePPO.load(path, device="cpu")
+        else:
+            net = AZNet.load(path).eval()
+        _nets[path] = net
     return net
 
 
-def _play(game: sim.VirusWarGame, nets: list[AZNet | None], n_sims: int,
+def _rl_action(game: sim.VirusWarGame, model) -> int:
+    """The RL policy's most likely legal move; same observation as rl-bot/env.py."""
+    w, h = game.width(), game.height()
+    obs = board_to_obs(game.serialize(), game.moves_remaining(), w, h)
+    mask = np.zeros(w * h, dtype=bool)
+    for x, y in game.valid_moves():
+        mask[y * w + x] = True
+    action, _ = model.predict(obs, action_masks=mask, deterministic=True)
+    return int(action)
+
+
+def _play(game: sim.VirusWarGame, nets: list, n_sims: int,
           c_puct: float, rng: np.random.Generator) -> tuple[int, int]:
     """
-    Play to the end; nets[p] is None for the random bot. A net keeps its subtree
-    within its own turn and starts a fresh tree each turn, like play_match.
+    Play to the end; nets[p] is None for the random bot, an AZNet (MCTS) or a
+    MaskablePPO model (policy only). An AZNet keeps its subtree within its own
+    turn and starts a fresh tree each turn, like play_match.
 
     Returns:
         (winner, number of sub-moves played)
@@ -111,6 +142,8 @@ def _play(game: sim.VirusWarGame, nets: list[AZNet | None], n_sims: int,
             moves = game.valid_moves()
             x, y = moves[rng.integers(len(moves))]
             action = y * game.width() + x
+        elif not isinstance(net, AZNet):
+            action = _rl_action(game, net)
         else:
             if root is None:
                 root = make_root(game.copy())
@@ -119,7 +152,7 @@ def _play(game: sim.VirusWarGame, nets: list[AZNet | None], n_sims: int,
         sub_moves += 1
         if _apply(game, action):
             return player, sub_moves
-        if net is not None and game.current_player() == player:
+        if isinstance(net, AZNet) and game.current_player() == player:
             root = root.children[action]
             root.prior = 1.0
         else:
@@ -142,9 +175,10 @@ def _ladder_task(model: str, opponent: str, opening: list[int], model_player: in
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=None,
-                        help="Model to evaluate (default: newest promoted)")
+                        help="AZ .pt or RL .zip model to evaluate (default: newest promoted)")
     parser.add_argument("--opponents", nargs="*", default=None,
-                        help="Model paths and/or 'random' (default: random + --picks promoted)")
+                        help="AZ .pt / RL .zip paths and/or 'random' "
+                             "(default: random + --picks promoted from the model's kind)")
     parser.add_argument("--picks", type=int, default=5,
                         help="Promoted opponents picked automatically, seed and previous included")
     parser.add_argument("--promoted-dir", default="models/promoted")
@@ -163,6 +197,8 @@ def main():
     promoted = promoted_models(args.promoted_dir)
     if args.model:
         target = Path(args.model)
+        if _is_rl(target):
+            promoted = promoted_models(target.parent, ".zip")
     elif promoted:
         target = promoted[-1]
     else:
@@ -171,10 +207,10 @@ def main():
 
     log = TrainingLogger(args.log)
     n_pairs = (args.games + 1) // 2
-    log.log_note(f"ladder start  model={target.name}  opponents={[_name(o) for o in opponents]}"
+    log.log_note(f"ladder start  model={_name(target)}  opponents={[_name(o) for o in opponents]}"
                  f"  games={2 * n_pairs}  sims={args.sims}  opening={args.opening_moves}"
                  f"  workers={args.workers}  seed={args.seed}")
-    print(f"Ladder: {target.name} vs {[_name(o) for o in opponents]}, "
+    print(f"Ladder: {_name(target)} vs {[_name(o) for o in opponents]}, "
           f"{2 * n_pairs} games each, {args.sims} sims")
 
     # The same openings for every opponent, so their results are comparable
@@ -218,7 +254,7 @@ def main():
 
     rows = [f"| {_name(o)} | {r['wr']:.1%} | {r['lo']:.0%}–{r['hi']:.0%} | {r['elo']:+.0f} |"
             for o, r in ((o, results[o]) for o in opponents if o in results)]
-    log.log_note(f"ladder done  model={target.name}  time={time.perf_counter() - t0:.0f}s\n\n"
+    log.log_note(f"ladder done  model={_name(target)}  time={time.perf_counter() - t0:.0f}s\n\n"
                  "| opponent | win rate | 95% interval | Elo diff |\n|---|---|---|---|\n"
                  + "\n".join(rows))
     print(f"\nDone. Results appended to {args.log}")
@@ -229,7 +265,7 @@ def _report(log: TrainingLogger, target: Path, opponent: str, t: dict) -> dict:
     wr = t["wins"] / n
     lo, hi = wilson(t["wins"], n)
     elo = elo_diff(wr, n)
-    log.log_line(f"ladder match  {target.stem} vs {_name(opponent)}  win_rate={wr:.1%}"
+    log.log_line(f"ladder match  {_name(target)} vs {_name(opponent)}  win_rate={wr:.1%}"
                  f"  ci95={lo:.1%}-{hi:.1%}  elo={elo:+.0f}  games={n}"
                  f"  side_wins P0={t['side'][0]} P1={t['side'][1]}"
                  f"  len_mean={t['sub_moves'] / n:.0f}  game_secs={t['secs'] / n:.1f}")
