@@ -41,7 +41,7 @@ This builds:
 | `VirusWarRandomBot` | `build/viruswar/random-bot/` | bot that plays random moves |
 | `viruswar_sim.*.so` | `build/server/` | game logic for the Python bots; built only if CMake finds pybind11 |
 
-**Play a game.** Start the server from its folder: it keeps `auth.txt` (accounts) and `stats.txt` (results) in its working directory. Then open two clients and connect both, each with its own login and password. A new login is registered on first connect. The server pairs the two players automatically.
+**Play a game.** Start the server from its folder: it keeps `auth.txt` (accounts) and `stats.txt` (results) in its working directory. Then open two clients and connect both, each with its own login and password. A new login is registered on first connect. The server pairs the two players automatically. The Connect dialog also sets the board size. A game allows 60 s per turn; tick **Custom time control** in the dialog to pick another limit, such as 5 minutes per game.
 
 ```bash
 cd build/server && ./GameServer
@@ -98,7 +98,8 @@ Build `viruswar_sim` with the same Python version as the venv, or it won't impor
 - [x] Highlight last moves of both players
 - [x] In-app log panel
 - [ ] Hand-drawn art style for board and pieces
-- [ ] Dynamic board size configurable per session
+- [x] Board size and time control chosen per session
+- [x] Clocks for both players
 
 ### Random bot
 - [x] Play random valid moves against any opponent

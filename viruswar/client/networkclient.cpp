@@ -13,11 +13,15 @@ NetworkClient::NetworkClient(QObject* parent)
 
 void NetworkClient::connectToServer(const QString& host, quint16 port,
                                     const QString& login, const QString& password,
-                                    const QString& preferredOpponent)
+                                    const QString& preferredOpponent, int boardWidth,
+                                    int boardHeight, const QString& timeControl)
 {
     login_ = login;
     password_ = password;
     preferredOpponent_ = preferredOpponent;
+    boardWidth_ = boardWidth;
+    boardHeight_ = boardHeight;
+    timeControl_ = timeControl;
     qDebug() << "Connecting to" << host << "port" << port;
     socket_->connectToHost(host, port);
 }
@@ -49,11 +53,14 @@ void NetworkClient::onConnected()
 {
     qDebug() << "Connected";
     emit connected();
-    QString msg;
-    if (preferredOpponent_.isEmpty())
-        msg = QString("mbclient:2:%1:%2:").arg(login_, password_);
-    else
-        msg = QString("mbclient:2:%1:%2:viruswar:10:10:%3:").arg(login_, password_, preferredOpponent_);
+    // mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H[:TARGET[:TIME]]: — TIME needs the TARGET field,
+    // which may be empty
+    QString msg = QString("mbclient:2:%1:%2:viruswar:%3:%4:")
+        .arg(login_, password_).arg(boardWidth_).arg(boardHeight_);
+    if (!timeControl_.isEmpty())
+        msg += preferredOpponent_ + ':' + timeControl_ + ':';
+    else if (!preferredOpponent_.isEmpty())
+        msg += preferredOpponent_ + ':';
     send(msg);
 }
 
@@ -105,20 +112,25 @@ void NetworkClient::parseLine(const QString& line)
         return;
     }
 
-    // found:GAMEID:OPPONENT:GAMENAME:W:H:role:  (GAMEID ignored — humans get it from go:)
-    static const QRegularExpression rxFound(R"(found:(\d+):(\w+):\w+:\d+:\d+:(first|second):)");
+    // found:GAMEID:OPPONENT:GAMENAME:W:H:role:[TIME:]  (GAMEID ignored — humans get it from go:)
+    static const QRegularExpression rxFound(
+        R"(found:(\d+):(\w+):\w+:(\d+):(\d+):(first|second):(?:([\w+]+):)?)");
     m = rxFound.match(line);
     if (m.hasMatch()) {
-        emit matchFound(m.captured(2), m.captured(3) == "first");
+        emit matchFound(m.captured(2), m.captured(5) == "first",
+                        m.captured(3).toInt(), m.captured(4).toInt(), m.captured(6));
         return;
     }
 
-    // go:BOARD:MOVES:GAMEID:
-    static const QRegularExpression rxGo(R"(go:([0-4]+):(\d+):(\d+):)");
+    // go:BOARD:MOVES:GAMEID:[MYMS:OPPONENTMS:]
+    static const QRegularExpression rxGo(R"(go:([0-4]+):(\d+):(\d+):(?:(\d+):(\d+):)?)");
     m = rxGo.match(line);
     if (m.hasMatch()) {
         gameId_ = m.captured(3).toInt();
-        emit yourTurn(m.captured(1), m.captured(2).toInt());
+        const bool timed = m.hasCaptured(4);
+        emit yourTurn(m.captured(1), m.captured(2).toInt(),
+                      timed ? m.captured(4).toLongLong() : -1,
+                      timed ? m.captured(5).toLongLong() : -1);
         return;
     }
 

@@ -12,7 +12,8 @@ public:
 
     void connectToServer(const QString& host, quint16 port,
                          const QString& login, const QString& password,
-                         const QString& preferredOpponent = QString());
+                         const QString& preferredOpponent, int boardWidth, int boardHeight,
+                         const QString& timeControl);
     void disconnectFromServer();
     void sendMove(int x, int y);
 
@@ -22,8 +23,11 @@ signals:
     void connected();
     void disconnected();
     void authSuccess(const QString& gameName, int width, int height);
-    void matchFound(const QString& opponent, bool goFirst);
-    void yourTurn(const QString& board, int movesRemaining);
+    // timeControl is empty when the server did not send one
+    void matchFound(const QString& opponent, bool goFirst, int width, int height,
+                    const QString& timeControl);
+    // myMs / opponentMs are -1 when the game has no time control
+    void yourTurn(const QString& board, int movesRemaining, qint64 myMs, qint64 opponentMs);
     void moveConfirmed(const QString& type, int x, int y);
     void opponentMoved(const QString& type, int x, int y);
     void wrongStep();
@@ -41,6 +45,9 @@ private:
     QString login_;
     QString password_;
     QString preferredOpponent_;
+    int boardWidth_ = 10;
+    int boardHeight_ = 10;
+    QString timeControl_;
     int gameId_ = 0;
 
     void send(const QString& cmd);
