@@ -29,7 +29,7 @@ Clients and bots talk to the server over a line-based text protocol on TCP port 
 - **Client** - desktop GUI to connect, authenticate, and play
 - **Random bot** - plays random valid moves; used as a training opponent for the RL bot
 - **RL bot** - reinforcement learning agent trained via self-play using MaskablePPO. Frozen: it plateaued far below the AZ bot, see [viruswar/rl-bot/README.md](viruswar/rl-bot/README.md)
-- **AZ bot** - AlphaZero-style agent: Monte Carlo tree search guided by a neural network, trained by pure self-play
+- **AZ bot** - AlphaZero-style agent: Monte Carlo tree search guided by a neural network, trained by pure self-play. The strongest player, see [viruswar/az-bot/README.md](viruswar/az-bot/README.md)
 
 ---
 
