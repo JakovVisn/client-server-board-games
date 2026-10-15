@@ -28,7 +28,7 @@ Clients and bots talk to the server over a line-based text protocol on TCP port 
 - **Server** - handles multiple simultaneous games and players. Designed so that adding a new game requires minimal changes to the server itself.
 - **Client** - desktop GUI to connect, authenticate, and play
 - **Random bot** - plays random valid moves; used as a training opponent for the RL bot
-- **RL bot** - reinforcement learning agent trained via self-play using MaskablePPO
+- **RL bot** - reinforcement learning agent trained via self-play using MaskablePPO. Frozen: it plateaued far below the AZ bot, see [viruswar/rl-bot/README.md](viruswar/rl-bot/README.md)
 - **AZ bot** - AlphaZero-style agent: Monte Carlo tree search guided by a neural network, trained by pure self-play
 
 ---
@@ -66,11 +66,12 @@ Clients and bots talk to the server over a line-based text protocol on TCP port 
 - [x] Multi-game support - handles unlimited simultaneous sessions
 - [x] Graceful shutdown - finishes active games before exiting
 
-### RL bot
+### RL bot (frozen)
 - [x] Gymnasium environment with action masking
 - [x] Self-play training with MaskablePPO
 - [x] Automatic promotion when win rate reaches threshold
 - [x] Inference bot with multi-game support and graceful shutdown
+- [x] Measured against the random bot and the AZ bot; frozen
 
 ### AZ bot
 - [x] MCTS with a policy/value network, one tree node per sub-move
