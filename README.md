@@ -89,7 +89,7 @@ Build `viruswar_sim` with the same Python version as the venv, or it won't impor
 - [x] Win/loss statistics
 - [x] Bot accounts - dedicated bot role with multi-game support
 - [x] Protocol versioning
-- [ ] Turn timer
+- [x] Time controls like in chess: per turn, per game, with increment; running out of time loses
 
 ### Client
 - [x] Connect dialog with persistent settings

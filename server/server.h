@@ -19,6 +19,7 @@ public:
     explicit Server(const QString& authFile, const QString& statsFile,
                     QObject* parent = nullptr);
     [[nodiscard]] bool start(const QHostAddress& address, quint16 port);
+    void setDefaultTimeControl(const TimeControl& tc) { defaultTimeControl_ = tc; }
 
 protected:
     void incomingConnection(qintptr socketDescriptor) override;
@@ -30,6 +31,7 @@ private:
     std::list<Client*> clients_;
     std::list<std::unique_ptr<GameSession>> sessions_;
     QMap<int, GameSession*> sessionById_;
+    TimeControl defaultTimeControl_;
 
     void parseData(const QString& cmd, Client* client);
     [[nodiscard]] bool stateAuthorize(const QString& cmd, Client* client);
@@ -40,6 +42,7 @@ private:
     [[nodiscard]] bool isAlreadyConnected(const QString& login) const;
     [[nodiscard]] std::unique_ptr<AbstractGame> makeGame(const QString& name, int w, int h) const;
     [[nodiscard]] static bool sameGame(const Client* a, const Client* b);
+    [[nodiscard]] TimeControl timeControlFor(const Client* a, const Client* b) const;
     [[nodiscard]] int countActiveSessions(const Client* a, const Client* b) const;
     void matchClients();
     void connectTwoClients(Client* client1, Client* client2);

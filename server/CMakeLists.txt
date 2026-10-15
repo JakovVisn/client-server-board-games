@@ -24,6 +24,7 @@ qt_add_executable(GameServer
     game_session.h game_session.cpp
     server_constants.h
     server.h server.cpp
+    time_control.h time_control.cpp
 )
 target_link_libraries(GameServer PRIVATE VirusWarCore Qt6::Core Qt6::Network)
 

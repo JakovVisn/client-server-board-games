@@ -66,10 +66,12 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     if (client->status() != Client::Status::Unauthenticated)
         return false;
 
-    // Groups: 1=VERSION 2=LOGIN 3=PASSWORD 4=GAMENAME(opt) 5=WIDTH(opt) 6=HEIGHT(opt) 7=TARGET(opt)
+    // Groups: 1=VERSION 2=LOGIN 3=PASSWORD 4=GAMENAME(opt) 5=WIDTH(opt) 6=HEIGHT(opt)
+    //         7=TARGET(opt, may be empty) 8=TIME(opt)
     // TARGET: "login" or "login/N" or "login1/N1,login2/N2"
+    // TIME: a time control (time_control.h); it needs the TARGET field, which may be empty
     static const QRegularExpression rx(
-        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+):(\d+)(?::([\w/,]+))?)?)?:)")
+        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+):(\d+)(?::([\w/,]*)(?::([\w+]+))?)?)?)?:)")
             .arg(AuthConfig::LOGIN_LENGTH_MIN)
             .arg(AuthConfig::LOGIN_LENGTH_MAX)
             .arg(AuthConfig::PASSWORD_LENGTH_MIN)
@@ -87,6 +89,7 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     int w = match.captured(5).toInt();
     int h = match.captured(6).toInt();
     const QString target   = match.captured(7);
+    const QString timeParam = match.captured(8);
 
     client->setLogin(login);
 
@@ -145,12 +148,23 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
             return true;
         }
 
+        std::optional<TimeControl> timeControl;
+        if (!timeParam.isEmpty()) {
+            timeControl = TimeControl::parse(timeParam);
+            if (!timeControl) {
+                client->send("badgame:");
+                client->disconnect();
+                return true;
+            }
+        }
+
         client->setBot(authManager_.isBot(login));
         if (client->isBot())
             client->setAutoLimit(authManager_.autoConnectionLimit(login));
         client->setGameName(gameName);
         client->setBoardWidth(w);
         client->setBoardHeight(h);
+        client->setTimeControl(timeControl);
         client->setStatus(Client::Status::Authorized);
         client->send(QString("mbserver:%1:%2:%3:%4:")
             .arg(static_cast<int>(ServerConfig::PROTOCOL_VERSION))
@@ -230,9 +244,20 @@ std::unique_ptr<AbstractGame> Server::makeGame(const QString& name, int w, int h
 
 bool Server::sameGame(const Client* a, const Client* b)
 {
+    // A client that asked for no time control accepts any
+    const bool timeOk = !a->timeControl() || !b->timeControl()
+        || *a->timeControl() == *b->timeControl();
     return a->gameName() == b->gameName()
         && a->boardWidth() == b->boardWidth()
-        && a->boardHeight() == b->boardHeight();
+        && a->boardHeight() == b->boardHeight()
+        && timeOk;
+}
+
+TimeControl Server::timeControlFor(const Client* a, const Client* b) const
+{
+    if (a->timeControl()) return *a->timeControl();
+    if (b->timeControl()) return *b->timeControl();
+    return defaultTimeControl_;
 }
 
 int Server::countActiveSessions(const Client* a, const Client* b) const
@@ -254,7 +279,8 @@ void Server::connectTwoClients(Client* client1, Client* client2)
     client1->setStatus(Client::Status::InGame);
     client2->setStatus(Client::Status::InGame);
 
-    auto session = std::make_unique<GameSession>(std::move(game), client1, client2, &authManager_);
+    auto session = std::make_unique<GameSession>(std::move(game), client1, client2, &authManager_,
+                                                 timeControlFor(client1, client2));
     const int id = session->id();
     session->setOnFinished([this] { matchClients(); });
     session->start();
@@ -275,7 +301,8 @@ void Server::connectPlayerWithBot(Client* player, Client* bot)
     player->setStatus(Client::Status::InGame);
     // bot stays Authorized — participates in unlimited simultaneous games
 
-    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_);
+    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_,
+                                                 timeControlFor(first, second));
     const int id = session->id();
     session->start();
     sessionById_[id] = session.get();
@@ -296,7 +323,8 @@ void Server::connectAutoWithBot(Client* seeker, Client* bot)
 
     bot->adjustAutoSessionCount(1);
 
-    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_);
+    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_,
+                                                 timeControlFor(first, second));
     const int id = session->id();
     session->setOnFinished([this, bot] {
         bot->adjustAutoSessionCount(-1);
@@ -318,7 +346,8 @@ void Server::connectTwoBots(Client* bot1, Client* bot2)
 
     // both bots stay Authorized
 
-    auto session = std::make_unique<GameSession>(std::move(game), bot1, bot2, &authManager_);
+    auto session = std::make_unique<GameSession>(std::move(game), bot1, bot2, &authManager_,
+                                                 timeControlFor(bot1, bot2));
     const int id = session->id();
     session->setOnFinished([this] { matchClients(); });
     session->start();

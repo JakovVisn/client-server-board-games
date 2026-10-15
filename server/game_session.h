@@ -2,8 +2,11 @@
 
 #include <functional>
 #include <memory>
+#include <QElapsedTimer>
 #include <QString>
+#include <QTimer>
 #include "abstract_game.h"
+#include "time_control.h"
 
 class AuthManager;
 class Client;
@@ -13,7 +16,8 @@ class GameSession
 public:
     explicit GameSession(std::unique_ptr<AbstractGame> game,
                          Client* player0, Client* player1,
-                         AuthManager* authManager);
+                         AuthManager* authManager,
+                         const TimeControl& timeControl = {});
 
     void setOnFinished(std::function<void()> cb) { onFinished_ = std::move(cb); }
 
@@ -34,11 +38,22 @@ private:
     AuthManager* authManager_;
     int id_;
 
+    TimeControl timeControl_;
+    qint64 clockMs_[2];          // Game mode: each player's remaining time, between turns
+    QElapsedTimer turnClock_;    // time spent in the current turn
+    QTimer deadline_;            // fires when the player to move runs out of time
+
     static int nextId_;
     std::function<void()> onFinished_;
 
     [[nodiscard]] Client* currentPlayer() const;
     [[nodiscard]] Client* waitingPlayer() const;
+
+    void startTurn();
+    void armDeadline();
+    void endTurn(bool completed);
+    [[nodiscard]] qint64 timeLeftMs() const;
+    void onTimeout();
 
     void finishGame(Client* winner, Client* loser);
     void finishGameDisconnect(Client* winner, Client* loser);

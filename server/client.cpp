@@ -50,6 +50,9 @@ void Client::setGameName(const QString& name) { gameName_ = name; }
 void Client::setBoardWidth(int w) { boardWidth_ = w; }
 void Client::setBoardHeight(int h) { boardHeight_ = h; }
 
+std::optional<TimeControl> Client::timeControl() const { return timeControl_; }
+void Client::setTimeControl(const std::optional<TimeControl>& tc) { timeControl_ = tc; }
+
 QMap<QString, int> Client::preferredOpponents() const { return preferredOpponents_; }
 void Client::setPreferredOpponents(const QMap<QString, int>& prefs) { preferredOpponents_ = prefs; }
 

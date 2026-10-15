@@ -37,20 +37,20 @@ So both players can use the same code: "my" cells are always `1` and `3`.
 
 ## Example session
 
-A complete exchange on a 5×5 board. Both players must ask for the same game and size to be matched. `C:` lines are sent by a client, `S:` lines by the server. Real traffic has no prefixes or comments.
+A complete exchange on a 5×5 board. Both players must ask for the same game and size to be matched. They also ask for no time limit (`none`, after an empty `TARGET`), so `go:` carries no clock fields; see [Time control](../docs/PROTOCOL.md#time-control) for timed games. `C:` lines are sent by a client, `S:` lines by the server. Real traffic has no prefixes or comments.
 
 **Login**
 ```
-alice C: mbclient:2:alice:secret:viruswar:5:5:
+alice C: mbclient:2:alice:secret:viruswar:5:5::none:
 alice S: mbserver:2:viruswar:5:5:
-bob   C: mbclient:2:bob:hunter2:viruswar:5:5:
+bob   C: mbclient:2:bob:hunter2:viruswar:5:5::none:
 bob   S: mbserver:2:viruswar:5:5:
 ```
 
 **The game starts (id 0); alice moves first**
 ```
-alice S: found:0:bob:viruswar:5:5:first:
-bob   S: found:0:alice:viruswar:5:5:second:
+alice S: found:0:bob:viruswar:5:5:first:none:
+bob   S: found:0:alice:viruswar:5:5:second:none:
 alice S: go:0000000000000000000000000:3:0:
 ```
 

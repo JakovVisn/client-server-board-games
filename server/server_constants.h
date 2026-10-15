@@ -11,6 +11,8 @@ namespace ServerConfig {
     inline constexpr int SEARCH_INTERVAL = 200;
     inline constexpr int INACTIVE_MIN_MS = 10000;
     inline constexpr int INACTIVE_MAX_MS = 300000;
+    // Used when neither player asks for a time control (see time_control.h)
+    inline const QString DEFAULT_TIME_CONTROL = QStringLiteral("turn60");
 }
 
 namespace AuthConfig {

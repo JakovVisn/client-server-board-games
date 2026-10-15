@@ -35,6 +35,7 @@ The server runs any game that implements `AbstractGame` (`server/abstract_game.h
 | `mbclient:VERSION:LOGIN:PASSWORD:` | first line after connecting | Log in for the default game and board size |
 | `mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H:` | first line | Log in for a given game and board size |
 | `mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H:TARGET:` | first line | Same, and ask for specific opponents (see [Matchmaking](#matchmaking)) |
+| `mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H:TARGET:TIME:` | first line | Same, and ask for a [time control](#time-control); `TARGET` may be empty: `…:10:10::game300+5:` |
 | `step:X:Y:GAMEID:` | after `go:` for that game | One sub-move on cell `(X, Y)` |
 | `pong:` | after `ping:` | Keep-alive answer |
 | `ping:` | any time | Server answers `pong:` |
@@ -49,8 +50,9 @@ The server runs any game that implements `AbstractGame` (`server/abstract_game.h
 | Message | Meaning |
 |---|---|
 | `mbserver:VERSION:GAME:W:H:` | Login accepted, with the game and board size you will be matched for |
-| `found:GAMEID:OPPONENT:GAME:W:H:ROLE:` | A game started. `ROLE` is `first` or `second`; `first` moves first |
+| `found:GAMEID:OPPONENT:GAME:W:H:ROLE:TIME:` | A game started. `ROLE` is `first` or `second`; `first` moves first. `TIME` is the game's [time control](#time-control) |
 | `go:BOARD:MOVES:GAMEID:` | Your move. `BOARD` is the game's board string from your point of view; `MOVES` is the number of sub-moves left in this turn |
+| `go:BOARD:MOVES:GAMEID:MYTIME:OPPTIME:` | The same in a game with a time limit: your time left and your opponent's, in milliseconds |
 | `field2:TYPE:X:Y:GAMEID:` | Your own sub-move was applied; `TYPE` is the game's move result |
 | `field1:TYPE:X:Y:GAMEID:` | Your opponent made a sub-move, same fields |
 | `wrongstep:GAMEID:` | Your sub-move was illegal; the same `go:` follows |
@@ -66,7 +68,7 @@ Errors at login (the server closes the connection after sending them):
 | `wrongver:` | `VERSION` is not 2 |
 | `wronguser:` | Wrong password for an existing login |
 | `alreadyconnected:` | This login is already connected |
-| `badgame:` | Unknown game name, or a board size the game does not accept |
+| `badgame:` | Unknown game name, a board size the game does not accept, or an invalid `TIME` |
 | `servererror:` | The server could not read or write `auth.txt` |
 
 Errors during play (the connection stays open):
@@ -95,7 +97,7 @@ stateDiagram-v2
         YourTurn --> YourTurn: step → wrongstep, go
         YourTurn --> Waiting: step → field2
     }
-    InGame --> Authorized: win / lose (back in the matchmaking pool)
+    InGame --> Authorized: win / lose, also on time out<br/>(back in the matchmaking pool)
     InGame --> Disconnected: connection lost or 300 s inactive (opponent wins)
     Authorized --> Disconnected: connection lost or 300 s inactive
     Disconnected --> [*]
@@ -107,6 +109,8 @@ stateDiagram-v2
    - the turn isn't over: the mover gets the next `go:` (with `MOVES` decreased);
    - the turn is over: the opponent gets `go:` for their turn;
    - the game is over: the winner gets `win:` and the loser gets `lose:`.
+
+   A player who runs out of time loses the same way, with `win:` / `lose:` (see [Time control](#time-control)).
 4. **After the game** both clients stay logged in and **return to the matchmaking pool**, so a new game may start without a new login. The Qt client disconnects after each game; bots stay connected.
 5. **Disconnect mid-game.** The remaining player wins and the stats record a win and a loss. A human gets `win:`; a bot gets `abort:` instead.
 
@@ -126,24 +130,26 @@ alice C: mbclient:2:alice:secret:
 alice S: mbserver:2:viruswar:10:10:
 bob   C: mbclient:2:bob:hunter2:
 bob   S: mbserver:2:viruswar:10:10:
-alice S: found:7:bob:viruswar:10:10:first:
-bob   S: found:7:alice:viruswar:10:10:second:
+alice S: found:7:bob:viruswar:10:10:first:turn60:
+bob   S: found:7:alice:viruswar:10:10:second:turn60:
 ```
+Neither asked for a time control, so the game gets the server default, 60 s per turn.
 
 **alice's sub-moves**
 ```
-alice S: go:<alice's board>:3:7:
+alice S: go:<alice's board>:3:7:60000:60000:
 alice C: step:0:0:7:
 alice S: field2:standard:0:0:7:
 bob   S: field1:standard:0:0:7:
-alice S: go:<alice's board>:2:7:
+alice S: go:<alice's board>:2:7:57650:60000:
 ```
+Her turn clock keeps running between sub-moves: 2.35 s are gone.
 
 **An illegal sub-move**
 ```
 alice C: step:9:0:7:
 alice S: wrongstep:7:
-alice S: go:<alice's board>:2:7:
+alice S: go:<alice's board>:2:7:54120:60000:
 ```
 
 **… turns alternate until the game ends …**
@@ -162,7 +168,27 @@ alice C: pong:
 
 - The server sends `ping:` after **10 s** without activity from a client and expects `pong:`.
 - A client is disconnected after **300 s** without activity. Only `step:` and `pong:` count as activity.
-- A client that answers every `ping:` is never disconnected, even if it never moves. There is no turn timer yet.
+- A client that answers every `ping:` is never disconnected, even if it never moves. In a game, the [time control](#time-control) ends that: the player who stops moving loses on time.
+
+## Time control
+
+Each game has a time control, written in one word:
+
+| `TIME` | Meaning |
+|---|---|
+| `turnN` | `N` seconds for each turn (all its sub-moves); unused time is lost |
+| `gameN` | `N` seconds per player for the whole game |
+| `gameN+I` | the same, plus `I` seconds added after each completed turn (Fischer increment) |
+| `none` | no limit |
+
+For example `turn60`, `game300`, `game300+5`. Limits: `turn` 1–3600 s, `game` 1–86400 s, increment up to 3600 s.
+
+- **Choosing.** A client may ask for one in `mbclient:` (`TIME`). It is matched only with clients that asked for the same time control or for none. A client that asks for none accepts any: the game uses the other player's choice, or the server default when neither chose. The default is `turn60`; the server's `--time-control` option changes it.
+- **The clock** of the player to move runs from the moment the server sends the `go:` that starts their turn. It keeps running between sub-moves and through `wrongstep:`. With `gameN+I` the increment is added when the player completes the turn.
+- **Time left** is reported in every `go:` as `MYTIME:OPPTIME:` in milliseconds. For `turnN`, `OPPTIME` is the full limit the opponent will get. A game with `none` sends `go:` without these fields.
+- **Running out of time** loses the game: the winner gets `win:` and the player who ran out gets `lose:`, bots included. The stats record it like any other result.
+
+The extra fields are appended at the end of `found:` and `go:`, so a client that ignores them keeps working.
 
 ## Matchmaking
 
@@ -172,7 +198,7 @@ Every pass considers only logged-in clients that are not in a game. Bot accounts
 2. **Random human vs human**, for humans without preferences.
 3. **Seekers vs league bots.** Clients without preferences and without an auto limit are matched against bot accounts that have free auto slots (`autoLimit`).
 
-Players are only matched when their game name and board size are identical. Who moves first is chosen at random.
+Players are only matched when their game name and board size are identical and their time controls are compatible (see [Time control](#time-control)). Who moves first is chosen at random.
 
 ## Accounts: `auth.txt`
 
