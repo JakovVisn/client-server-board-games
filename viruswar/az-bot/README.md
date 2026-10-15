@@ -45,7 +45,7 @@ The archived runs are in `models_run*/` (gitignored).
 
 ## Running it
 
-From this folder, with the shared venv `viruswar/.venv` (installed from `viruswar/requirements.txt`; `requirements.txt` here lists what the AZ bot alone needs):
+From this folder, with the shared venv `viruswar/.venv` and the `viruswar_sim` symlink (see [Getting started](../../README.md#getting-started)). `requirements.txt` here lists what the AZ bot alone needs; the shared venv is installed from `viruswar/requirements.txt`.
 
 ```bash
 cp .env.example .env

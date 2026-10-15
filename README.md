@@ -23,6 +23,45 @@ Clients and bots talk to the server over a line-based text protocol on TCP port 
 
 ---
 
+## Getting started
+
+You need CMake 3.16+, a C++17 compiler and Qt 6 (Core, Network, Gui, Widgets). The Python bots also need Python 3 and pybind11.
+
+```bash
+cmake -B build
+cmake --build build
+```
+
+This builds:
+
+| Program | Path | What it is |
+|---|---|---|
+| `GameServer` | `build/server/` | the server, TCP port 1234 |
+| `VirusWarClient` | `build/viruswar/client/` | desktop client for playing |
+| `VirusWarRandomBot` | `build/viruswar/random-bot/` | bot that plays random moves |
+| `viruswar_sim.*.so` | `build/server/` | game logic for the Python bots; built only if CMake finds pybind11 |
+
+**Play a game.** Start the server from its folder: it keeps `auth.txt` (accounts) and `stats.txt` (results) in its working directory. Then open two clients and connect both, each with its own login and password. A new login is registered on first connect. The server pairs the two players automatically.
+
+```bash
+cd build/server && ./GameServer
+```
+
+**Play against a bot.** Start the random bot and tell it to look for you: `./VirusWarRandomBot --login randombot --password <any> --preferred <your login>`. For a strong opponent, run the AZ bot's `play.py`: see [viruswar/az-bot/README.md](viruswar/az-bot/README.md).
+
+**Python bots.** Both bots use one venv and the built `viruswar_sim` module:
+
+```bash
+cd viruswar
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+ln -s ../../build/server/viruswar_sim.*.so az-bot/    # the same for rl-bot/
+```
+
+Build `viruswar_sim` with the same Python version as the venv, or it won't import.
+
+---
+
 ## Goals
 
 - **Server** - handles multiple simultaneous games and players. Designed so that adding a new game requires minimal changes to the server itself.

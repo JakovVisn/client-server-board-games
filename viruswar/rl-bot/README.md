@@ -32,7 +32,7 @@ What did work: the network clearly learned the game. It beats random play and be
 
 ## Running it
 
-From this folder, with the server running and the shared venv `viruswar/.venv` (installed from `viruswar/requirements.txt`, which both bots use):
+From this folder, with the server running, the shared venv `viruswar/.venv` and the `viruswar_sim` symlink (see [Getting started](../../README.md#getting-started)):
 
 ```bash
 cp .env.example .env       # training accounts and PPO settings
