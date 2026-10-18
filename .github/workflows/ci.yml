@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: viruswar/requirements.txt
+
+      # CMake builds viruswar_sim for this venv and takes pybind11 from it
+      - name: Python venv
+        run: |
+          python -m venv viruswar/.venv
+          viruswar/.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+          viruswar/.venv/bin/pip install -r viruswar/requirements.txt
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.*"
+          cache: true
+
+      - name: System libraries for Qt Gui
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: C++ tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Python tests
+        run: |
+          ln -s ../../build/server/viruswar_sim*.so viruswar/az-bot/
+          cd viruswar && .venv/bin/python -m pytest tests

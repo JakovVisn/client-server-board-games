@@ -1,5 +1,7 @@
 # Client-Server Board Games
 
+[![CI](https://github.com/JakovVisn/client-server-board-games/actions/workflows/ci.yml/badge.svg)](https://github.com/JakovVisn/client-server-board-games/actions/workflows/ci.yml)
+
 A multiplayer board game platform: a game server, a desktop client and bots.
 
 ## Components
@@ -84,7 +86,7 @@ The venv installs pybind11. Once `viruswar/.venv` exists, CMake builds `viruswar
 cd viruswar && .venv/bin/python -m pytest tests   # Python: log format, server connection, AZ bot internals
 ```
 
-The Python tests need the built `viruswar_sim`. None of the tests start a server or a bot.
+The Python tests need the built `viruswar_sim`. None of the tests start a server or a bot. GitHub Actions runs both suites on every push (`.github/workflows/ci.yml`).
 
 ## Logging
 
