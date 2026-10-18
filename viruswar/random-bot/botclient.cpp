@@ -1,7 +1,7 @@
 #include "botclient.h"
 #include "botlogic.h"
+#include "logging.h"
 #include <QCoreApplication>
-#include <QDebug>
 #include <QRegularExpression>
 
 static constexpr int kReconnectDelayMs = 3000;
@@ -34,20 +34,20 @@ void BotClient::start()
 
 void BotClient::connectToServer()
 {
-    qDebug() << login_ << "connecting to" << host_ << ":" << port_;
+    Log::info(QString("connecting login=%1 host=%2 port=%3").arg(login_, host_).arg(port_));
     socket_->connectToHost(host_, port_);
 }
 
 void BotClient::send(const QString& cmd)
 {
     if (socket_->state() != QAbstractSocket::ConnectedState) return;
-    qDebug() << login_ << "→" << cmd;
+    Log::debug(QString("send line=%1").arg(Log::maskPassword(cmd)));
     socket_->write((cmd + '\n').toUtf8());
 }
 
 void BotClient::onConnected()
 {
-    qDebug() << login_ << "connected";
+    Log::info(QString("connected login=%1").arg(login_));
     // any:any — random moves work on every board, so play whatever size the opponent chose
     QString msg = QString("mbclient:2:%1:%2:viruswar:any:any:").arg(login_, password_);
     if (!preferred_.isEmpty())
@@ -57,7 +57,7 @@ void BotClient::onConnected()
 
 void BotClient::onDisconnected()
 {
-    qDebug() << login_ << "disconnected";
+    Log::info(QString("disconnected login=%1").arg(login_));
     if (shuttingDown_) {
         QCoreApplication::quit();
     } else {
@@ -72,7 +72,7 @@ void BotClient::onReadyRead()
     while (socket_->canReadLine()) {
         const QString line = QString::fromUtf8(socket_->readLine()).trimmed();
         if (!line.isEmpty()) {
-            qDebug() << login_ << "←" << line;
+            Log::debug(QString("recv line=%1").arg(line));
             parseLine(line);
         }
     }
@@ -81,19 +81,25 @@ void BotClient::onReadyRead()
 void BotClient::onSocketError(QAbstractSocket::SocketError error)
 {
     if (error == QAbstractSocket::RemoteHostClosedError) return;
-    qDebug() << login_ << "socket error:" << socket_->errorString();
-    scheduleReconnect();
+    Log::warn(QString("socket_error login=%1 error=%2")
+                  .arg(login_, Log::quoted(socket_->errorString())));
+    if (shuttingDown_)
+        QCoreApplication::quit();  // not connected: no games to finish
+    else
+        scheduleReconnect();
 }
 
 void BotClient::parseLine(const QString& line)
 {
     if (line == "ping:") { send("pong:"); return; }
 
-    static const QRegularExpression rxWin(R"(win:(\d+):)");
-    auto m = rxWin.match(line);
+    // win:/lose:GAMEID:CAUSE: or abort:GAMEID:
+    static const QRegularExpression rxResult(R"(^(win|lose|abort):(\d+):(?:(\w+):)?)");
+    auto m = rxResult.match(line);
     if (m.hasMatch()) {
-        const int id = m.captured(1).toInt();
-        qDebug() << login_ << "won game" << id;
+        const int id = m.captured(2).toInt();
+        Log::info(QString("game_over id=%1 result=%2 cause=%3")
+                      .arg(id).arg(m.captured(1), m.captured(3).isEmpty() ? "-" : m.captured(3)));
         if (gameSizes_.remove(id)) {
             --activeGames_;
             checkShutdown();
@@ -101,56 +107,39 @@ void BotClient::parseLine(const QString& line)
         return;
     }
 
-    static const QRegularExpression rxLose(R"(lose:(\d+):)");
-    m = rxLose.match(line);
+    static const QRegularExpression rxWrongStep(R"(^wrongstep:(\d+):)");
+    m = rxWrongStep.match(line);
     if (m.hasMatch()) {
-        const int id = m.captured(1).toInt();
-        qDebug() << login_ << "lost game" << id;
-        if (gameSizes_.remove(id)) {
-            --activeGames_;
-            checkShutdown();
-        }
+        Log::warn(QString("wrongstep id=%1 reason=move_logic_error").arg(m.captured(1)));
         return;
     }
 
-    static const QRegularExpression rxAbort(R"(abort:(\d+):)");
-    m = rxAbort.match(line);
-    if (m.hasMatch()) {
-        const int id = m.captured(1).toInt();
-        qDebug() << login_ << "game aborted" << id;
-        if (gameSizes_.remove(id)) {
-            --activeGames_;
-            checkShutdown();
-        }
-        return;
-    }
-
-    static const QRegularExpression rxWrongstep(R"(wrongstep:(\d+):)");
-    m = rxWrongstep.match(line);
-    if (m.hasMatch()) {
-        qDebug() << login_ << "wrongstep in game" << m.captured(1) << "— move logic error";
-        return;
-    }
-
-    static const QRegularExpression rxMbserver(R"(mbserver:\d+:\w+:\w+:\w+:)");  // W:H may be any:any
+    static const QRegularExpression rxMbserver(R"(^mbserver:\d+:\w+:\w+:\w+:)");  // W:H may be any:any
     m = rxMbserver.match(line);
-    if (m.hasMatch()) { qDebug() << login_ << "authenticated"; return; }
+    if (m.hasMatch()) { Log::info(QString("login_ok login=%1").arg(login_)); return; }
 
-    // found:GAMEID:OPPONENT:GAMENAME:W:H:role:
-    static const QRegularExpression rxFound(R"(found:(\d+):\w+:\w+:(\d+):(\d+):(?:first|second):)");
+    // found:GAMEID:OPPONENT:GAMENAME:W:H:ROLE:[TIME:]
+    static const QRegularExpression rxFound(R"(^found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):)");
     m = rxFound.match(line);
     if (m.hasMatch()) {
-        gameSizes_[m.captured(1).toInt()] = {m.captured(2).toInt(), m.captured(3).toInt()};
+        const int id = m.captured(1).toInt();
+        gameSizes_[id] = {m.captured(3).toInt(), m.captured(4).toInt()};
         ++activeGames_;
+        Log::info(QString("game_start id=%1 opponent=%2 board=%3x%4")
+                      .arg(id).arg(m.captured(2), m.captured(3), m.captured(4)));
         return;
     }
 
-    // go:BOARD:MOVES:GAMEID:
-    static const QRegularExpression rxGo(R"(go:([0-4]+):(\d+):(\d+):)");
+    // go:BOARD:MOVES:GAMEID:[MYTIME:OPPTIME:]
+    static const QRegularExpression rxGo(R"(^go:([0-4]+):(\d+):(\d+):)");
     m = rxGo.match(line);
     if (m.hasMatch()) {
         const int gameId = m.captured(3).toInt();
-        const auto size = gameSizes_.value(gameId, {10, 10});
+        if (!gameSizes_.contains(gameId)) {
+            Log::warn(QString("unknown_game id=%1").arg(gameId));
+            return;
+        }
+        const auto size = gameSizes_.value(gameId);
         makeMove(m.captured(1), size.first, size.second, gameId);
         return;
     }
@@ -160,9 +149,13 @@ void BotClient::parseLine(const QString& line)
 
 void BotClient::makeMove(const QString& board, int w, int h, int gameId)
 {
+    if (board.size() != w * h) {
+        Log::warn(QString("bad_board id=%1 length=%2 expected=%3").arg(gameId).arg(board.size()).arg(w * h));
+        return;
+    }
     const QPoint move = BotLogic::randomMove(board, w, h);
     if (move.x() < 0) {
-        qDebug() << login_ << "no valid moves in game" << gameId;
+        Log::warn(QString("no_valid_moves id=%1").arg(gameId));
         return;
     }
     send(QString("step:%1:%2:%3:").arg(move.x()).arg(move.y()).arg(gameId));
@@ -179,7 +172,12 @@ void BotClient::initiateShutdown()
     if (shuttingDown_) return;
     shuttingDown_ = true;
     reconnectTimer_->stop();
-    qDebug() << login_ << "graceful shutdown —" << activeGames_ << "game(s) remaining";
+    Log::info(QString("shutdown login=%1 active_games=%2").arg(login_).arg(activeGames_));
+    if (socket_->state() != QAbstractSocket::ConnectedState) {
+        QCoreApplication::quit();  // disconnected or still connecting: nothing to finish
+        return;
+    }
+    send("nomatch:");  // no new games while the active ones finish
     checkShutdown();
 }
 

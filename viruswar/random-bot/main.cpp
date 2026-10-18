@@ -1,30 +1,18 @@
-#include <QCoreApplication>
 #include <QCommandLineParser>
-#include <QTime>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
 #include "botclient.h"
+#include "logging.h"
 
-static void messageHandler(QtMsgType type, const QMessageLogContext&, const QString& msg)
-{
-    const char* prefix = (type == QtWarningMsg)  ? "WARN  " :
-                         (type == QtCriticalMsg) ? "ERROR " : "";
-    fprintf(stderr, "%s  %s%s\n",
-            qPrintable(QTime::currentTime().toString("hh:mm:ss")),
-            prefix,
-            qPrintable(msg));
-}
-
-static std::atomic<int> g_signalCount{0};
+static std::atomic g_signalCount{0};
 static void handleSignal(int) { ++g_signalCount; }
 
 int main(int argc, char* argv[])
 {
-    qInstallMessageHandler(messageHandler);
     QCoreApplication app(argc, argv);
-    app.setApplicationName("random-bot");
-    app.setApplicationVersion("1.0");
+    QCoreApplication::setApplicationName("random-bot");
+    QCoreApplication::setApplicationVersion("1.0");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("VirusWar random bot — plays random valid moves");
@@ -35,9 +23,19 @@ int main(int argc, char* argv[])
     parser.addOption({{"l", "login"},    "Bot login (required)",    "login"});
     parser.addOption({{"w", "password"}, "Bot password (required)", "password"});
     parser.addOption({{"P", "preferred"},
-                      "Preferred opponents, e.g. rltrain/4 or rltrain/4,rlplay/2",
-                      "preferred", "rltrain"});
+                      "Preferred opponents, e.g. alice or rltrain_1/4,rltrain_2/4 (default: none, then it "
+                      "plays league bots, one game at a time, and humans who ask for it)",
+                      "preferred"});
+    parser.addOption({"log-level", "debug (adds protocol traffic), info, warn or error", "level", "info"});
+    parser.addOption({"log-file", "Also append log lines to this file", "file"});
     parser.process(app);
+
+    QtMsgType logLevel;
+    if (!Log::parseLevel(parser.value("log-level"), &logLevel)) {
+        fprintf(stderr, "Invalid --log-level: %s\n", qPrintable(parser.value("log-level")));
+        return 1;
+    }
+    Log::install("randbot", logLevel, parser.value("log-file"));
 
     if (!parser.isSet("login") || !parser.isSet("password")) {
         fprintf(stderr, "Error: --login and --password are required\n\n");
@@ -64,6 +62,7 @@ int main(int argc, char* argv[])
     });
     signalPoller.start(200);
 
-    qDebug() << "Started as" << login << "targeting" << host << ":" << port;
-    return app.exec();
+    Log::info(QString("start login=%1 host=%2 port=%3 preferred=%4")
+                  .arg(login, host).arg(port).arg(preferred.isEmpty() ? "-" : preferred));
+    return QCoreApplication::exec();
 }

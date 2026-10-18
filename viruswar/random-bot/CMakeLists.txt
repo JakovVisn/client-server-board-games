@@ -14,6 +14,7 @@ add_executable(VirusWarRandomBot
 )
 
 target_link_libraries(VirusWarRandomBot PRIVATE
+    SharedLog
     Qt6::Core
     Qt6::Network
 )

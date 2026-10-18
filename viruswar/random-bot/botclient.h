@@ -1,8 +1,6 @@
 #pragma once
 
 #include <QMap>
-#include <QObject>
-#include <QPair>
 #include <QTcpSocket>
 #include <QTimer>
 
@@ -29,10 +27,10 @@ private:
     void onReadyRead();
     void onSocketError(QAbstractSocket::SocketError error);
 
-    QTcpSocket* socket_;
-    QTimer*     reconnectTimer_;
+    QTcpSocket* socket_ = nullptr;
+    QTimer*     reconnectTimer_ = nullptr;
     QString     host_;
-    quint16     port_;
+    quint16     port_ = 0;
     QString     login_;
     QString     password_;
     QString     preferred_;
