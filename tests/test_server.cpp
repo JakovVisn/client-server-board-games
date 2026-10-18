@@ -29,12 +29,17 @@ QString readFile(const QString& path)
     return file.open(QIODevice::ReadOnly | QIODevice::Text) ? QString::fromUtf8(file.readAll()) : QString();
 }
 
-void playTurn(VirusWarGame& g, std::initializer_list<std::pair<int, int>> moves)
+// Returns false at the first illegal move; callers wrap it in QVERIFY so the test stops there
+bool playTurn(VirusWarGame& g, std::initializer_list<std::pair<int, int>> moves)
 {
     for (auto [x, y] : moves) {
-        QVERIFY(g.isValidMove(x, y));
+        if (!g.isValidMove(x, y)) {
+            qWarning("illegal move (%d, %d)", x, y);
+            return false;
+        }
         (void)g.applyMove(x, y);
     }
+    return true;
 }
 
 Candidate human(const QString& login, QMap<QString, int> prefs = {})
@@ -86,9 +91,9 @@ private slots:
     void threeSubMovesMakeATurn()
     {
         VirusWarGame g(5, 5);
-        playTurn(g, {{0, 0}, {1, 1}});
+        QVERIFY(playTurn(g, {{0, 0}, {1, 1}}));
         QCOMPARE(g.turnResult(), AbstractGame::TurnResult::Ongoing);
-        playTurn(g, {{2, 2}});
+        QVERIFY(playTurn(g, {{2, 2}}));
         QCOMPARE(g.turnResult(), AbstractGame::TurnResult::TurnComplete);
         g.advanceTurn();
         QCOMPARE(g.currentPlayer(), 1);
@@ -109,9 +114,9 @@ private slots:
     void placingOnAnOpponentPieceCaptures()
     {
         VirusWarGame g(5, 5);
-        playTurn(g, {{0, 0}, {1, 1}, {2, 2}});
+        QVERIFY(playTurn(g, {{0, 0}, {1, 1}, {2, 2}}));
         g.advanceTurn();
-        playTurn(g, {{4, 4}, {3, 3}});
+        QVERIFY(playTurn(g, {{4, 4}, {3, 3}}));
         QCOMPARE(g.applyMove(2, 2), std::string("caught"));
         QCOMPARE(g.serializeForCurrentPlayer()[2 * 5 + 2], '3');
         QCOMPARE(g.serializeForOpponent()[2 * 5 + 2], '4');
@@ -123,9 +128,9 @@ private slots:
         // Opponent's only piece is in the corner, walled in by my captures
         VirusWarGame g(5, 5);
         g.initFromBoard("10000" "00000" "00000" "00033" "00032");
-        playTurn(g, {{1, 0}, {0, 1}});
+        QVERIFY(playTurn(g, {{1, 0}, {0, 1}}));
         QCOMPARE(g.turnResult(), AbstractGame::TurnResult::Ongoing);
-        playTurn(g, {{1, 1}});
+        QVERIFY(playTurn(g, {{1, 1}}));
         QCOMPARE(g.turnResult(), AbstractGame::TurnResult::GameOver);
     }
 

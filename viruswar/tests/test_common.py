@@ -30,6 +30,15 @@ def test_log_level_filters(tmp_path):
     assert path.read_text().count("\n") == 1
 
 
+def test_debug_level_keeps_library_debug_out(tmp_path):
+    path = tmp_path / "test.log"
+    vlog.setup("tester", str(path), level="debug")
+    logging.getLogger("urllib3.connectionpool").debug("library detail")
+    logging.getLogger("x").debug("our detail")
+    text = path.read_text()
+    assert "our detail" in text and "library detail" not in text
+
+
 def test_mask_password_and_quoting():
     assert vlog.mask_password("mbclient:2:alice:secret:viruswar:10:10:") == \
         "mbclient:2:alice:***:viruswar:10:10:"

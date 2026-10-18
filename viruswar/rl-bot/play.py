@@ -187,18 +187,25 @@ class BotSlot:
 
             active.clear()
             game_sizes.clear()
+            nomatch_sent = False
 
             try:
                 while True:
                     msg = conn.read_message()
+                    if _shutdown_requested and not nomatch_sent:
+                        conn.stop_matching()  # from this thread, which owns the socket
+                        nomatch_sent = True
 
                     m = _RE_FOUND.match(msg)
                     if m:
                         game_id = int(m.group(1))
+                        if _shutdown_requested:
+                            conn.resign(game_id)  # offered before nomatch: arrived
+                            log.info(f"resign login={self.login} id={game_id} reason=shutdown")
+                            continue
                         game_sizes[game_id] = (int(m.group(3)), int(m.group(4)))
-                        if not _shutdown_requested:
-                            active.add(game_id)
-                            log.info(f"game_start login={self.login} id={game_id} opponent={m.group(2)}")
+                        active.add(game_id)
+                        log.info(f"game_start login={self.login} id={game_id} opponent={m.group(2)}")
                         continue
 
                     m = _RE_GO.match(msg)
@@ -249,16 +256,18 @@ class BotSlot:
 
                     m = _RE_LOSE.match(msg)
                     if m:
-                        active.discard(int(m.group(1)))
-                        self._games_played += 1
-                        self._slot_games += 1
-                        log.info(f"game_over login={self.login} result=lose"
-                                 f" win_rate={self._wins / self._games_played:.1%}"
-                                 f" games={self._games_played}")
-                        if self._slot_games % self._LOG_EVERY == 0:
-                            log.info(f"winrate login={self.login} role={self.role}"
-                                     f" win_rate={self._slot_wins / self._slot_games:.1%}"
-                                     f" games={self._slot_games} model={self._slot_model}")
+                        game_id = int(m.group(1))
+                        if game_id in active:  # not a game resigned unplayed
+                            active.discard(game_id)
+                            self._games_played += 1
+                            self._slot_games += 1
+                            log.info(f"game_over login={self.login} result=lose"
+                                     f" win_rate={self._wins / self._games_played:.1%}"
+                                     f" games={self._games_played}")
+                            if self._slot_games % self._LOG_EVERY == 0:
+                                log.info(f"winrate login={self.login} role={self.role}"
+                                         f" win_rate={self._slot_wins / self._slot_games:.1%}"
+                                         f" games={self._slot_games} model={self._slot_model}")
                         if _shutdown_requested and not active:
                             break
                         continue

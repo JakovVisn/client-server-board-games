@@ -35,6 +35,9 @@ class _Formatter(logging.Formatter):
         return line
 
 
+_NOISY_LIBRARIES = ("asyncio", "filelock", "fsspec", "matplotlib", "PIL", "torch", "urllib3")
+
+
 def setup(component: str, file: str | None = None, level: str | None = None) -> logging.Logger:
     """
     Send every log line to stderr and, if given, append it to `file`.
@@ -60,6 +63,9 @@ def setup(component: str, file: str | None = None, level: str | None = None) -> 
         h.setFormatter(formatter)
         root.addHandler(h)
     root.setLevel(name)
+    # At debug level, libraries would log their own debug lines under our component name
+    for lib in _NOISY_LIBRARIES:
+        logging.getLogger(lib).setLevel(max(logging.INFO, root.level))
     return logging.getLogger(component)
 
 
