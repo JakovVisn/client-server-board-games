@@ -1,8 +1,8 @@
 # Virus War Protocol
 
-How Virus War fills the game-specific parts of the [server protocol](../docs/PROTOCOL.md). Messages, login, errors, matchmaking and keep-alive are described there.
+How Virus War fills the game-specific parts of the [server protocol](../docs/PROTOCOL.md), which covers messages, login, errors, matchmaking and keep-alive.
 
-Server implementation: `server/virus_war_game.cpp`, `server/viruswar_field.cpp`.
+Server code: `server/virus_war_game.cpp`, `server/viruswar_field.cpp`.
 
 ## Parameters
 
@@ -15,7 +15,7 @@ Server implementation: `server/virus_war_game.cpp`, `server/viruswar_field.cpp`.
 
 ## Board encoding
 
-`BOARD` in `go:` is `W × H` digits in row-major order: index `y * W + x`. It is always written **from the receiving player's point of view**:
+`BOARD` in `go:` is `W × H` digits, row by row: index `y * W + x`. It is always **from the receiving player's point of view**:
 
 | Digit | Cell |
 |---|---|
@@ -25,19 +25,19 @@ Server implementation: `server/virus_war_game.cpp`, `server/viruswar_field.cpp`.
 | `3` | opponent's piece I captured (mine now, permanent) |
 | `4` | my piece the opponent captured (theirs now, permanent) |
 
-So both players can use the same code: "my" cells are always `1` and `3`.
+So both players can use the same code: my cells are always `1` and `3`.
 
 ## Rules, as enforced by the server
 
 - **Neighbours** are the 8 surrounding cells.
-- **A move is legal** on an empty cell (`0`) or an opponent's piece (`2`) that is connected to one of my pieces (`1`): either adjacent to it directly, or through a chain of my captured cells (`3`).
-- **Placing on an opponent's piece (`2`) captures it.** The move reports `caught`, the cell becomes `3` for me and `4` for the opponent, and it can never change again.
-- **Start:** the corners `(0, 0)` and `(W−1, H−1)` are also legal when empty, unless I already hold the opposite corner with a piece (`1`). The first player starts in one corner and the second player takes the other.
-- **A turn is 3 moves.** After a player completes a turn, if the opponent cannot make 3 legal moves in their next turn, the player who just moved wins (`win:…:rules:` / `lose:…:rules:`). While either start corner is still empty, the server assumes the opponent can move and the game goes on.
+- **A move is legal** on an empty cell (`0`) or an opponent's piece (`2`) connected to one of my pieces (`1`): adjacent to it, or linked to it through a chain of my captured cells (`3`).
+- **Placing on an opponent's piece (`2`) captures it.** The move reports `caught`; the cell becomes `3` for me and `4` for the opponent, for good.
+- **Start:** the corners `(0, 0)` and `(W−1, H−1)` are also legal when empty, unless I already have a piece (`1`) in the opposite corner. The first player starts in one corner, the second takes the other.
+- **A turn is 3 moves.** After a player completes a turn, if the opponent cannot make 3 legal moves in their next turn, the player who just moved wins (`win:…:rules:` / `lose:…:rules:`). While either start corner is empty, the game goes on.
 
 ## Example session
 
-A complete exchange on a 5×5 board. Both players must ask for the same game and size to be matched. They also ask for no time limit (`none`, after an empty `TARGET`), so `go:` carries no clock fields; see [Time control](../docs/PROTOCOL.md#time-control) for timed games. `C:` lines are sent by a client, `S:` lines by the server. Real traffic has no prefixes or comments.
+A complete game on a 5×5 board. Both players ask for the same game and size, so they are matched, and for no time limit (`none`, after an empty `TARGET`), so `go:` has no clock fields (timed games: [Time control](../docs/PROTOCOL.md#time-control)). `C:` lines are sent by a client, `S:` lines by the server; real traffic has no prefixes or comments.
 
 **Login**
 ```
@@ -105,7 +105,9 @@ bob   S: win:0:rules:
 alice S: lose:0:rules:
 ```
 
-Reading the board from `go:` as a 5×5 grid. This is alice's view of her last `go:` above (`1000001000004000002000002`). Cut it into rows of `W` = 5 digits, `10000 01000 00400 00020 00002`, and stack them top to bottom:
+### Reading a board
+
+alice's last `go:` board above, `1000001000004000002000002`, cut into rows of `W` = 5 digits (`10000 01000 00400 00020 00002`) and stacked top to bottom:
 
 | | x=0 | x=1 | x=2 | x=3 | x=4 |
 |---|---|---|---|---|---|

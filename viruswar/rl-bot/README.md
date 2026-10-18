@@ -1,18 +1,18 @@
 # RL bot (frozen)
 
-A PPO agent for Virus War. It learned to play, but stopped improving at a level far below the [AZ bot](../az-bot), so development stopped in June 2026. The code is kept as a working baseline and for the comparison below.
+A PPO agent for Virus War. It learned to play but plateaued far below the [AZ bot](../az-bot), so development stopped in June 2026. The code stays as a working baseline and for the comparison below.
 
 ## How it works
 
 - **Model:** MaskablePPO (sb3-contrib) with a residual CNN: 64 channels, 4 residual blocks, a 256-unit feature layer. Illegal moves are masked out.
 - **Input:** the board from the moving player's view as 6 planes of 10×10 (my pieces, my captures, opponent's pieces, opponent's captures, empty, sub-moves left). Each sub-move is one action.
 - **Reward:** +1 for a win (plus up to 0.5 for captured cells), −1 for a loss, nothing in between.
-- **Training:** league self-play through the real server. `train.py` runs 10 envs, each logged in with an `rltrain_*` account. Matchmaking pairs them with league bots served by `play.py` from the agent's own promoted models (latest, three previous, a random one). A model is promoted when its rollout win rate stays above 62% for 5 rollouts in a row.
-- **Playing:** `play.py` makes the policy's most likely legal move, without search.
+- **Training:** league self-play through the real server. `train.py` runs several envs (10 in the run below), each logged in with an `rltrain_*` account. Matchmaking pairs them with league bots that `play.py` serves from the agent's own promoted models (latest, three previous, a random one). A model is promoted when its rollout win rate stays above a threshold for several rollouts in a row (the run used 62% and 5; `.env.example` has 55% and 3).
+- **Playing:** `play.py` plays the policy's most likely legal move, without search.
 
 ## Result
 
-Trained June 14–24, 2026: about 48M steps (one step is one sub-move), 10 promotions. The latest promoted model (`promoted_0048354848`), 200 games per opponent on paired random openings ([`az-bot/ladder.py`](../az-bot/ladder.py), 2026-10-15):
+Trained June 14–24, 2026: about 48M steps (one step = one sub-move), 10 promotions. Latest promoted model (`promoted_0048354848`), 200 games per opponent on paired random openings ([`az-bot/ladder.py`](../az-bot/ladder.py), 2026-10-15):
 
 | Opponent | Win rate | 95% interval |
 |---|---|---|
@@ -24,15 +24,15 @@ Trained June 14–24, 2026: about 48M steps (one step is one sub-move), 10 promo
 
 ## Why it was frozen
 
-- **It plateaued.** The last 20M steps, 40% of all training, brought no measurable gain against its own older model. League self-play kept it level with itself rather than pushing it further.
-- **No search.** The policy plays one move straight from the network. In Virus War a single sub-move can cut off a territory, and AZ checks about 100 continuations before each move. An AZ model after a few hours of training won all 200 games. The best AZ model wins in about 54 sub-moves; a game between the RL bot and random moves lasts about 180.
-- **Expensive training.** Every training move goes through the TCP server, so 48M steps were spread over 10 days. AZ trains offline on the `viruswar_sim` simulator and needed about 22k games for a far stronger model.
+- **It plateaued.** The last 20M steps (40% of all training) brought no measurable gain against its own older model. League self-play kept it level with itself instead of pushing it further.
+- **No search.** The policy plays straight from the network. In Virus War one sub-move can cut off a territory, and AZ checks about 100 continuations before each move. An AZ model after a few hours of training won all 200 games. The best AZ model wins in about 54 sub-moves; RL bot vs random moves lasts about 180.
+- **Expensive training.** Every training move goes through the TCP server, so 48M steps took 10 days. AZ trains offline on the `viruswar_sim` simulator and needed about 22k games for a far stronger model.
 
-What did work: the network clearly learned the game. It beats random play and beats MCTS guided by an untrained network.
+What did work: the network clearly learned the game. It beats random play and MCTS guided by an untrained network.
 
 ## Running it
 
-From this folder, with the server running, the shared venv `viruswar/.venv` and the `viruswar_sim` symlink (see [Getting started](../../README.md#getting-started)):
+Run from this folder, with the server running, the shared venv `viruswar/.venv` and the `viruswar_sim` symlink (see [Getting started](../../README.md#getting-started)):
 
 ```bash
 cp .env.example .env       # training accounts and PPO settings
