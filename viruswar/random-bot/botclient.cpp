@@ -1,10 +1,26 @@
 #include "botclient.h"
-#include "botlogic.h"
 #include "logging.h"
+#include "viruswar_field.h"
 #include <QCoreApplication>
+#include <QList>
+#include <QPoint>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 
 static constexpr int kReconnectDelayMs = 3000;
+
+// A uniformly random legal move, or (-1, -1) if there is none
+static QPoint randomMove(const QString& board, int w, int h)
+{
+    const VirusWarField field = VirusWarField::fromBoard(board.toStdString(), w, h);
+    QList<QPoint> moves;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            if (field.isValidMove(x, y))
+                moves.append(QPoint(x, y));
+    if (moves.isEmpty()) return {-1, -1};
+    return moves[QRandomGenerator::global()->bounded(moves.size())];
+}
 
 BotClient::BotClient(QString host, quint16 port, QString login, QString password,
                      QString preferred, QObject* parent)
@@ -153,7 +169,7 @@ void BotClient::makeMove(const QString& board, int w, int h, int gameId)
         Log::warn(QString("bad_board id=%1 length=%2 expected=%3").arg(gameId).arg(board.size()).arg(w * h));
         return;
     }
-    const QPoint move = BotLogic::randomMove(board, w, h);
+    const QPoint move = randomMove(board, w, h);
     if (move.x() < 0) {
         Log::warn(QString("no_valid_moves id=%1").arg(gameId));
         return;

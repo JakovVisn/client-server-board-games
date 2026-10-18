@@ -52,18 +52,7 @@ PYBIND11_MODULE(viruswar_sim, m) {
     m.def("valid_action_mask", [](const std::string& board, int w, int h) {
         if (w <= 0 || h <= 0 || static_cast<int>(board.size()) != w * h)
             throw py::value_error("board length must be w * h, with w and h positive");
-        VirusWarField field(w, h);
-        for (int i = 0; i < static_cast<int>(board.size()); ++i) {
-            VirusWarField::Cell c;
-            switch (board[i]) {
-            case '1': c = VirusWarField::Cell::X;      break;
-            case '2': c = VirusWarField::Cell::O;      break;
-            case '3': c = VirusWarField::Cell::CatchX; break;
-            case '4': c = VirusWarField::Cell::CatchO; break;
-            default:  c = VirusWarField::Cell::Clear;  break;
-            }
-            field.setCell(i % w, i / w, c);
-        }
+        const VirusWarField field = VirusWarField::fromBoard(board, w, h);
         std::vector<bool> mask(w * h);
         for (int i = 0; i < w * h; ++i)
             mask[i] = field.isValidMove(i % w, i / w);

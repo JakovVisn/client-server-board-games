@@ -138,6 +138,16 @@ private slots:
         QCOMPARE(g.turnResult(), AbstractGame::TurnResult::TurnComplete);
     }
 
+    void fieldFromBoard()
+    {
+        const std::string board = "1000001000004000002000002";
+        const VirusWarField field = VirusWarField::fromBoard(board, 5, 5);
+        QCOMPARE(field.serialize(), board);
+        QVERIFY(field.isValidMove(2, 1));     // next to my piece at (1, 1)
+        QVERIFY(!field.isValidMove(2, 2));    // captured by the opponent
+        QVERIFY(!field.isValidMove(4, 0));    // not connected
+    }
+
     void boardSizes()
     {
         VirusWarGame g;

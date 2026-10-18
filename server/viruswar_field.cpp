@@ -50,6 +50,23 @@ std::string VirusWarField::serialize() const
     return result;
 }
 
+VirusWarField VirusWarField::fromBoard(const std::string& board, int width, int height)
+{
+    VirusWarField field(width, height);
+    for (int i = 0; i < width * height && i < static_cast<int>(board.size()); ++i) {
+        Cell c = Cell::Clear;
+        switch (board[i]) {
+        case '1': c = Cell::X;      break;
+        case '2': c = Cell::O;      break;
+        case '3': c = Cell::CatchX; break;
+        case '4': c = Cell::CatchO; break;
+        default: break;
+        }
+        field.setCell(i % width, i / width, c);
+    }
+    return field;
+}
+
 bool VirusWarField::isConnectedToX(int x, int y, std::vector<bool>& visited) const
 {
     visited[cellIndex(x, y)] = true;

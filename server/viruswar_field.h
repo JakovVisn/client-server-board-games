@@ -30,6 +30,8 @@ public:
     [[nodiscard]] bool hasMovesForNextTurn(int movesPerTurn);
 
     [[nodiscard]] std::string serialize() const;
+    // The inverse of serialize(): a board as sent in go:, from its owner's view
+    [[nodiscard]] static VirusWarField fromBoard(const std::string& board, int width, int height);
 
 private:
     int width_;

@@ -10,11 +10,11 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network)
 add_executable(VirusWarRandomBot
     main.cpp
     botclient.cpp
-    botlogic.cpp
 )
 
 target_link_libraries(VirusWarRandomBot PRIVATE
     SharedLog
+    VirusWarCore
     Qt6::Core
     Qt6::Network
 )
