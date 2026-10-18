@@ -4,3 +4,5 @@ sb3-contrib
 gymnasium
 numpy
 python-dotenv
+pybind11
+pytest

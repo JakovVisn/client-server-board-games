@@ -56,7 +56,8 @@ def value_metrics(net: AZNet, obs: torch.Tensor, z: np.ndarray,
     Value quality on (obs, z); net must be in eval mode.
 
     Returns:
-        (one-line summary, mse) — mse above 1.0 is worse than always predicting 0.
+        (key=value summary, mse) — mse above 1.0 is worse than always predicting 0.
+        Per game phase lo-hi: acc_lo-hi (value sign accuracy), corr_lo-hi, absv_lo-hi (mean |v|).
     """
     with torch.no_grad():  # chunked: tens of thousands of positions at once would need GBs
         v = torch.cat([net(chunk)[1].squeeze(-1) for chunk in obs.split(4096)]).numpy()
@@ -67,10 +68,10 @@ def value_metrics(net: AZNet, obs: torch.Tensor, z: np.ndarray,
             continue
         acc = np.mean(np.sign(v[m]) == z[m])
         corr = np.corrcoef(v[m], z[m])[0, 1] if v[m].std() > 0 and z[m].std() > 0 else float("nan")
-        parts.append(f"phase {lo:.1f}-{min(hi, 1.0):.1f}: sign_acc={acc:.2f} corr={corr:+.2f}"
-                     f" mean|v|={np.abs(v[m]).mean():.2f}")
+        tag = f"{lo:.1f}-{min(hi, 1.0):.1f}"
+        parts.append(f"acc_{tag}={acc:.2f} corr_{tag}={corr:+.2f} absv_{tag}={np.abs(v[m]).mean():.2f}")
     mse = float(np.mean((v - z) ** 2))
-    return f"mse={mse:.3f}  " + "  |  ".join(parts), mse
+    return " ".join([f"mse={mse:.3f}"] + parts), mse
 
 
 def policy_metrics(net: AZNet, obs: torch.Tensor, pi: np.ndarray) -> str:
@@ -88,5 +89,5 @@ def policy_metrics(net: AZNet, obs: torch.Tensor, pi: np.ndarray) -> str:
     target_entropy = -(t * torch.log(t.clamp_min(1e-12))).sum(-1).mean().item()
     xent = -(t * log_p).sum(-1).mean().item()
     top1 = (log_p.argmax(-1) == t.argmax(-1)).float().mean().item()
-    return (f"p_loss={xent:.3f}  net_entropy={net_entropy:.2f}  target_entropy={target_entropy:.2f}"
-            f"  net_max_p={p.max(-1).values.mean().item():.2f}  top1_agree={top1:.2f}")
+    return (f"p_loss={xent:.3f} net_entropy={net_entropy:.2f} target_entropy={target_entropy:.2f}"
+            f" net_max_p={p.max(-1).values.mean().item():.2f} top1_agree={top1:.2f}")

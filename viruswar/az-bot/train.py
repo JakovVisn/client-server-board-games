@@ -23,12 +23,12 @@ Usage:
 
 import argparse
 import copy
+import logging
 import math
 import os
 import random
 import signal
 import time
-import traceback
 from pathlib import Path
 
 import numpy as np
@@ -39,10 +39,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from diagnostics import policy_metrics, value_dataset, value_metrics
+from log import setup as setup_logging
 from net import AZNet
 from parallel import NetStore, make_executor, run_pit, run_self_play
 from symmetry import augment, check_symmetries
-from training_logger import TrainingLogger
 
 # ── Hyperparameters (can be overridden via .env) ──────────────────────────────
 
@@ -79,12 +79,14 @@ SAVE_EVERY        = int(os.getenv("AZ_SAVE_EVERY",         "5"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+log = logging.getLogger(__name__)
+
 _stop = False
 
 
 def _handle_signal(sig, frame):
     global _stop
-    print("\n[train] Stopping after current iteration...")
+    log.info("stop_requested when=after_this_iteration")
     _stop = True
 
 
@@ -152,13 +154,22 @@ def _load_state(path: str, games: int, optimizer: torch.optim.Optimizer) -> list
     return buffer
 
 
-def _promote(net: AZNet, step: int, win_rate: float,
-             promoted_dir: str, logger: TrainingLogger) -> None:
+def _promote(net: AZNet, step: int, win_rate: float, promoted_dir: str) -> bool:
+    """
+    Save net as promoted_<step>.pt. Refused when that name already exists or is not the
+    newest (possible after resuming from an older checkpoint): it would overwrite a model,
+    or sort as older so play.py's "latest" and the pit would never pick it.
+    """
     os.makedirs(promoted_dir, exist_ok=True)
     path = os.path.join(promoted_dir, f"promoted_{step:010d}.pt")
+    newest = max((_games_in_name(str(p)) for p in Path(promoted_dir).glob("promoted_*.pt")),
+                 default=-1)
+    if step <= newest:
+        log.warning(f"promote_refused games={step} newest_promoted={newest} reason=not_newer")
+        return False
     net.save(path)
-    logger.log_promotion(step, win_rate, path)
-    print(f"[train] promoted → {path}")
+    log.info(f"promote games={step} win_rate={win_rate:.1%} path={path}")
+    return True
 
 
 def _sample_batch(buffer: list, batch_size: int,
@@ -180,29 +191,29 @@ def main():
                         help="Directory for checkpoint saves")
     parser.add_argument("--promoted-dir", default="models/promoted",
                         help="Directory for promoted models (read by play.py)")
-    parser.add_argument("--log",          default="models/training_log_az.md",
-                        help="Training log file")
+    parser.add_argument("--log",          default="models/train_az.log",
+                        help="Log file (events, one line each)")
     args = parser.parse_args()
 
     os.makedirs(args.models_dir, exist_ok=True)
-    logger = TrainingLogger(args.log)
+    setup_logging("aztrain", args.log)
 
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
     try:
-        _train(args, logger)
+        _train(args)
     except Exception:
-        logger.log_line("train crash\n\n```\n" + traceback.format_exc() + "```\n")
+        log.exception("crash")
         raise
 
 
-def _train(args, logger: TrainingLogger) -> None:
+def _train(args) -> None:
     rng = np.random.default_rng()
 
     # ── Sanity checks ─────────────────────────────────────────────────────────
     mismatches = check_symmetries(20, random.Random(0))
-    logger.log_line(f"train symmetry_check  mismatches={mismatches}")
+    log.info(f"symmetry_check mismatches={mismatches}")
     if mismatches:
         raise RuntimeError(f"board symmetries break the rules ({mismatches} mismatches); "
                            "augmentation would corrupt training data")
@@ -212,10 +223,8 @@ def _train(args, logger: TrainingLogger) -> None:
     load_path = args.load or _latest_checkpoint(args.models_dir)
     if load_path:
         net = AZNet.load(load_path)
-        print(f"[train] resumed from {load_path}")
     else:
         net = AZNet()
-        print("[train] starting from scratch")
 
     total_games = _games_in_name(load_path) if load_path else 0
 
@@ -223,13 +232,13 @@ def _train(args, logger: TrainingLogger) -> None:
     # Plain list, not deque: random.sample indexes into the middle, which is O(n) on a deque
     state_path = os.path.join(args.models_dir, "train_state.pt")
     replay_buffer = (_load_state(state_path, total_games, optimizer) if load_path else None) or []
-    logger.log_line(f"train resume_state  buffer={len(replay_buffer)}"
-                    f"  optimizer={'restored' if replay_buffer else 'fresh'}")
+    log.info(f"resume_state buffer={len(replay_buffer)}"
+             f" optimizer={'restored' if replay_buffer else 'fresh'}")
 
     # Seed promoted/ with the untrained model if the folder is empty
     promoted_path = Path(args.promoted_dir)
     if not any(promoted_path.glob("promoted_*.pt")) if promoted_path.exists() else True:
-        _promote(net, total_games, 0.0, args.promoted_dir, logger)
+        _promote(net, total_games, 0.0, args.promoted_dir)
 
     # best_net is the snapshot we pit against: the newest promoted model, which on a
     # resume can be stronger than the checkpoint we continue from.
@@ -238,19 +247,19 @@ def _train(args, logger: TrainingLogger) -> None:
     best_net   = AZNet.load(str(best_file)).eval()
     best_games = _games_in_name(str(best_file))
 
-    logger.log_note(
-        f"az-bot session start  loaded={load_path or 'scratch'}  best={best_file.name}"
-        f"  workers={N_WORKERS}"
-        f"  self_play={N_SELF_PLAY}  n_sims={N_SIMS}  temp_moves={TEMPERATURE_MOVES}"
-        f"  position_keep={POSITION_KEEP}  sample_reuse={SAMPLE_REUSE}"
-        f"  min_buffer={MIN_BUFFER}  batch={BATCH_SIZE}  buffer={BUFFER_SIZE}"
-        f"  lr={LR}  weight_decay={WEIGHT_DECAY}  value_loss_weight={VALUE_LOSS_WEIGHT}"
-        f"  eval_every={EVAL_EVERY}  pit_games={N_PIT_GAMES}  pit_sims={N_SIMS_PIT}"
-        f"  pit_opening={PIT_OPENING_MOVES}  promote={PROMOTE_THRESHOLD}"
-        f"  value_check_positions={len(value_data[1])}  save_every={SAVE_EVERY}"
+    log.info(
+        f"session_start loaded={load_path or 'scratch'} best={best_file.name}"
+        f" workers={N_WORKERS}"
+        f" self_play={N_SELF_PLAY} n_sims={N_SIMS} temp_moves={TEMPERATURE_MOVES}"
+        f" position_keep={POSITION_KEEP} sample_reuse={SAMPLE_REUSE}"
+        f" min_buffer={MIN_BUFFER} batch={BATCH_SIZE} buffer={BUFFER_SIZE}"
+        f" lr={LR} weight_decay={WEIGHT_DECAY} value_loss_weight={VALUE_LOSS_WEIGHT}"
+        f" eval_every={EVAL_EVERY} pit_games={N_PIT_GAMES} pit_sims={N_SIMS_PIT}"
+        f" pit_opening={PIT_OPENING_MOVES} promote={PROMOTE_THRESHOLD}"
+        f" value_check_positions={len(value_data[1])} save_every={SAVE_EVERY}"
     )
     net.eval()
-    logger.log_line(f"train value_random  iter=0  {value_metrics(net, *value_data)[0]}")
+    log.info(f"value_random iter=0 {value_metrics(net, *value_data)[0]}")
 
     store = NetStore()
     executor = make_executor(N_WORKERS)
@@ -259,15 +268,14 @@ def _train(args, logger: TrainingLogger) -> None:
         iteration = 0
         while not _stop:
             iteration += 1
-            print(f"\n[train] ── iter {iteration}  total_games={total_games:,} ──")
 
             # ── 1. Self-play ──────────────────────────────────────────────────
             net.eval()
             net_path = store.save(net, "latest")
 
             def on_self_play_game(i: int, n_pos: int, winner: int, secs: float) -> None:
-                logger.log_line(f"train self_play_game  iter={iteration}  game={i + 1}/{N_SELF_PLAY}"
-                                f"  positions={n_pos}  winner=P{winner}  time={secs:.1f}s")
+                log.info(f"self_play_game iter={iteration} game={i + 1}/{N_SELF_PLAY}"
+                         f" positions={n_pos} winner=P{winner} secs={secs:.1f}")
 
             t0 = time.perf_counter()
             games = run_self_play(executor, net_path, N_SELF_PLAY, N_SIMS, TEMPERATURE_MOVES,
@@ -278,13 +286,12 @@ def _train(args, logger: TrainingLogger) -> None:
             examples = [ex for game_examples, _ in games for ex in game_examples]
             lengths = [len(game_examples) for game_examples, _ in games]
             p0_wins = sum(1 for _, winner in games if winner == 0)
-            print(f"[train] self-play  new={len(examples)}  ({sp_secs:.0f}s)")
-            logger.log_line(
-                f"train self_play  iter={iteration}  games={N_SELF_PLAY}  positions={len(examples)}"
-                f"  len_mean={np.mean(lengths):.0f}  len_min={min(lengths)}  len_max={max(lengths)}"
-                f"  winners P0={p0_wins} P1={N_SELF_PLAY - p0_wins}"
-                f"  time={sp_secs:.0f}s  games/min={N_SELF_PLAY / sp_secs * 60:.1f}"
-                f"  sims/s={len(examples) * N_SIMS / sp_secs:.0f}"
+            log.info(
+                f"self_play iter={iteration} games={N_SELF_PLAY} positions={len(examples)}"
+                f" len_mean={np.mean(lengths):.0f} len_min={min(lengths)} len_max={max(lengths)}"
+                f" p0_wins={p0_wins} p1_wins={N_SELF_PLAY - p0_wins}"
+                f" secs={sp_secs:.0f} games_per_min={N_SELF_PLAY / sp_secs * 60:.1f}"
+                f" sims_per_sec={len(examples) * N_SIMS / sp_secs:.0f}"
             )
 
             # ── 2. Value check on games the net has not trained on yet ────────
@@ -292,10 +299,9 @@ def _train(args, logger: TrainingLogger) -> None:
             fresh_z = np.array([ex[2] for ex in examples])
             fresh_phase = np.concatenate([np.arange(n) / n for n in lengths])
             fresh_line, fresh_mse = value_metrics(net, fresh_obs, fresh_z, fresh_phase)
-            logger.log_line(f"train value_fresh  iter={iteration}  {fresh_line}")
+            log.info(f"value_fresh iter={iteration} {fresh_line}")
             fresh_pi = np.stack([ex[1] for ex in examples])
-            logger.log_line(f"train policy_fresh  iter={iteration}"
-                            f"  {policy_metrics(net, fresh_obs, fresh_pi)}")
+            log.info(f"policy_fresh iter={iteration} {policy_metrics(net, fresh_obs, fresh_pi)}")
 
             # ── 3. Buffer: keep a random fraction of every game's positions ───
             kept = [ex for ex in examples if rng.random() < POSITION_KEEP]
@@ -304,9 +310,8 @@ def _train(args, logger: TrainingLogger) -> None:
                 del replay_buffer[:len(replay_buffer) - BUFFER_SIZE]
 
             if len(replay_buffer) < MIN_BUFFER:
-                print(f"[train] warming up buffer ({len(replay_buffer)} < {MIN_BUFFER})")
-                logger.log_line(f"train skip_train  iter={iteration}"
-                                f"  buffer={len(replay_buffer)} < min_buffer={MIN_BUFFER}")
+                log.info(f"skip_train iter={iteration} buffer={len(replay_buffer)}"
+                         f" min_buffer={MIN_BUFFER}")
                 continue
 
             # ── 4. Train ──────────────────────────────────────────────────────
@@ -334,16 +339,14 @@ def _train(args, logger: TrainingLogger) -> None:
             avg_loss  = total_loss  / n_steps
             avg_ploss = total_ploss / n_steps
             avg_vloss = total_vloss / n_steps
-            print(f"[train] loss={avg_loss:.4f}  "
-                  f"policy={avg_ploss:.4f}  value={avg_vloss:.4f}")
             # v_loss (games already trained on) far below fresh_v_mse (this
             # iteration's games, measured before training) = memorising outcomes.
-            logger.log_note(
-                f"az-bot iter={iteration}  games={total_games:,}"
-                f"  loss={avg_loss:.4f}  p_loss={avg_ploss:.4f}  v_loss={avg_vloss:.4f}"
-                f"  fresh_v_mse={fresh_mse:.4f}  gap={fresh_mse - avg_vloss:+.4f}"
-                f"  steps={n_steps}  kept={len(kept)}/{len(examples)}"
-                f"  buffer={len(replay_buffer)}  train_time={train_secs:.0f}s"
+            log.info(
+                f"iteration iter={iteration} games={total_games}"
+                f" loss={avg_loss:.4f} p_loss={avg_ploss:.4f} v_loss={avg_vloss:.4f}"
+                f" fresh_v_mse={fresh_mse:.4f} gap={fresh_mse - avg_vloss:+.4f}"
+                f" steps={n_steps} kept={len(kept)}/{len(examples)}"
+                f" buffer={len(replay_buffer)} train_secs={train_secs:.0f}"
             )
 
             # ── 5. Save checkpoint ────────────────────────────────────────────
@@ -351,40 +354,33 @@ def _train(args, logger: TrainingLogger) -> None:
                 ckpt = os.path.join(args.models_dir, f"az_{total_games:010d}.pt")
                 net.save(ckpt)
                 _save_state(state_path, total_games, optimizer, replay_buffer)
-                print(f"[train] saved → {ckpt}")
-                logger.log_line(f"train checkpoint  games={total_games:,}  path={ckpt}"
-                                f"  buffer={len(replay_buffer)}")
+                log.info(f"checkpoint games={total_games} path={ckpt} buffer={len(replay_buffer)}")
 
             # ── 6. Pit vs best ────────────────────────────────────────────────
             if iteration % EVAL_EVERY == 0:
                 net.eval()
-                logger.log_line(f"train value_random  iter={iteration}"
-                                f"  {value_metrics(net, *value_data)[0]}")
-                print(f"[train] pit vs checkpoint at games={best_games:,}"
-                      f"  ({N_PIT_GAMES} games, {N_SIMS_PIT} sims each)...")
+                log.info(f"value_random iter={iteration} {value_metrics(net, *value_data)[0]}")
+                log.info(f"pit_start vs_games={best_games} games={N_PIT_GAMES} sims={N_SIMS_PIT}")
 
                 def on_pit_game(pair: int, a_player: int, winner: int,
                                 sub_moves: int, secs: float) -> None:
                     result = "new" if winner == a_player else "best"
-                    logger.log_line(f"train pit_game  pair={pair + 1}  new_as=P{a_player}"
-                                    f"  winner=P{winner} ({result})  sub_moves={sub_moves}"
-                                    f"  time={secs:.1f}s")
+                    log.info(f"pit_game pair={pair + 1} new_as=P{a_player} winner=P{winner}"
+                             f" result={result} sub_moves={sub_moves} secs={secs:.1f}")
 
                 t0 = time.perf_counter()
                 wr = run_pit(executor, store.save(net, "latest"), best_path,
                              N_PIT_GAMES, N_SIMS_PIT, opening_moves=PIT_OPENING_MOVES,
                              on_game=on_pit_game)
                 pit_secs = time.perf_counter() - t0
-                promoted = wr >= PROMOTE_THRESHOLD
-                print(f"[train] pit win rate = {wr:.1%}  threshold={PROMOTE_THRESHOLD:.0%}")
-                logger.log_note(
-                    f"az-bot pit  games={total_games:,}  win_rate={wr:.1%}"
-                    f"  vs_checkpoint={best_games:,}  threshold={PROMOTE_THRESHOLD:.0%}"
-                    f"  promoted={'yes' if promoted else 'no'}  time={pit_secs:.0f}s"
+                passed = wr >= PROMOTE_THRESHOLD  # promote (or promote_refused) follows
+                log.info(
+                    f"pit games={total_games} win_rate={wr:.1%}"
+                    f" vs_games={best_games} threshold={PROMOTE_THRESHOLD:.0%}"
+                    f" passed={'yes' if passed else 'no'} secs={pit_secs:.0f}"
                 )
 
-                if promoted:
-                    _promote(net, total_games, wr, args.promoted_dir, logger)
+                if passed and _promote(net, total_games, wr, args.promoted_dir):
                     best_net   = copy.deepcopy(net).eval()
                     best_games = total_games
                     best_path  = store.save(best_net, "best")
@@ -396,8 +392,7 @@ def _train(args, logger: TrainingLogger) -> None:
     ckpt = os.path.join(args.models_dir, f"az_{total_games:010d}.pt")
     net.save(ckpt)
     _save_state(state_path, total_games, optimizer, replay_buffer)
-    logger.log_session_end(total_games, ckpt)
-    print(f"[train] stopped. Final checkpoint: {ckpt}")
+    log.info(f"session_end games={total_games} path={ckpt}")
 
 
 if __name__ == "__main__":

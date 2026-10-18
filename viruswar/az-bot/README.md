@@ -66,7 +66,8 @@ cp .env.example .env
 models/
   checkpoints/   az_NNNNNNNNNN.pt (every 5 iterations) + train_state.pt
   promoted/      promoted_NNNNNNNNNN.pt, read by play.py; promoted_0000000000 is the untrained seed
-  training_log_az.md  play_log_az.md  eval_log_az.md  ladder_log_az.md
+  train_az.log  play_az.log  eval_az.log  ladder_az.log   event logs (see Logging in the main README)
+  ladder_az.md                                          ladder result tables
 ```
 
 The number in a model's name is the count of self-play games it was trained on.

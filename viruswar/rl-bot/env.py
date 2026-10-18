@@ -12,9 +12,9 @@ Channels:
 5 — moves_remaining (normalized to 0..1, broadcast)
 """
 
+import logging
 import re
 import time
-from datetime import datetime
 
 import gymnasium as gym
 import numpy as np
@@ -22,6 +22,8 @@ from gymnasium import spaces
 
 from bot_client import ServerConnection
 from viruswar_sim import valid_action_mask
+
+log = logging.getLogger(__name__)
 
 # Bot protocol: found:GAMEID:OPPONENT:GAMENAME:W:H:role:
 _RE_FOUND     = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
@@ -39,8 +41,7 @@ class VirusWarEnv(gym.Env):
     def __init__(self, host: str, port: int,
                  credentials: list[tuple[str, str]],
                  opponent: str = "",
-                 board_w: int = 10, board_h: int = 10,
-                 log_path: str = ""):
+                 board_w: int = 10, board_h: int = 10):
         super().__init__()
         self._host = host
         self._port = port
@@ -49,7 +50,6 @@ class VirusWarEnv(gym.Env):
         self._connected = False
         self._client: ServerConnection | None = None
         self._login = "?"
-        self._log_path = log_path
 
         self.w = board_w
         self.h = board_h
@@ -73,9 +73,7 @@ class VirusWarEnv(gym.Env):
                 self._board, self._moves_remaining = self._wait_for_game()
                 return self._obs(), {}
             except (ConnectionError, OSError) as e:
-                msg = f"Connection error: {e}"
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] {msg}. Retrying in 3s...")
-                self._log_reconnect(msg)
+                log.warning(f"connection_lost login={self._login} error={e!r} retry_secs=3")
                 self._connected = False
                 if self._client:
                     self._client.disconnect()
@@ -87,9 +85,7 @@ class VirusWarEnv(gym.Env):
         try:
             return self._step(x, y)
         except (ConnectionError, OSError) as e:
-            msg = f"Connection lost during step: {e}"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] {msg}")
-            self._log_reconnect(msg)
+            log.warning(f"connection_lost login={self._login} during=step error={e!r}")
             self._connected = False
             if self._client:
                 self._client.disconnect()
@@ -115,18 +111,7 @@ class VirusWarEnv(gym.Env):
             if m:
                 if m.group(1) != gid:
                     continue
-                ts = datetime.now().strftime("%H:%M:%S")
-                rows = [self._board[r*self.w:(r+1)*self.w] for r in range(self.h)]
-                board_str = "\n".join(f"  {''.join(row)}" for row in rows)
-                print(f"[{ts}][env] WARNING: wrongstep  move=({x},{y})  login={self._login}\n{board_str}")
-                if self._log_path:
-                    ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    try:
-                        with open(self._log_path, "a", encoding="utf-8") as f:
-                            f.write(f"- `{ts_full}` train [{self._login}] wrongstep"
-                                    f"  move=({x},{y})  board={self._board}\n")
-                    except OSError:
-                        pass
+                log.warning(f"wrongstep login={self._login} move={x},{y} board={self._board}")
                 continue  # server sends go: right after wrongstep; read it and return normally
 
             rt_ms = (time.perf_counter() - t0) * 1000
@@ -176,16 +161,6 @@ class VirusWarEnv(gym.Env):
     # Connection
     # =========================================================
 
-    def _log_reconnect(self, msg: str) -> None:
-        if not self._log_path:
-            return
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(f"- `{ts}` train [{self._login}] reconnect  {msg}\n")
-        except OSError:
-            pass
-
     def _try_connect(self):
         """Try credentials in order, skip accounts that are alreadyconnected."""
         for login, password in self._credentials:
@@ -195,7 +170,7 @@ class VirusWarEnv(gym.Env):
                 self._client = client
                 self._connected = True
                 self._login = login
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][{login}] Connected")
+                log.info(f"connected login={login}")
                 return
             except ConnectionError as e:
                 if "alreadyconnected" in str(e):
@@ -259,8 +234,7 @@ class VirusWarEnv(gym.Env):
                 if w != self.w or h != self.h:
                     self.w, self.h = w, h
                     self._update_spaces()
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][{self._login}] "
-                      f"Game started vs {m.group(2)}")
+                log.info(f"game_start login={self._login} id={self._game_id} opponent={m.group(2)}")
                 continue
 
             # First go: after found: — game is on

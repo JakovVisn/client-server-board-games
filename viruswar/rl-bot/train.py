@@ -4,11 +4,12 @@ Training script for the VirusWar RL bot (CNN version).
 
 import argparse
 import json
+import logging
+import multiprocessing
 import os
 import signal
 import sys
 from collections import deque
-from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -27,7 +28,9 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 from env import VirusWarEnv
-from training_logger import TrainingLogger
+from log import setup as setup_logging
+
+log = logging.getLogger(__name__)
 
 
 class ResidualBlock(nn.Module):
@@ -74,8 +77,7 @@ class CustomCNN(BaseFeaturesExtractor):
 class PromoteCallback(BaseCallback):
     def __init__(self, promoted_dir: str, threshold: float,
                  cooldown_steps: int, min_episodes: int,
-                 streak_required: int, keep_last: int = 10,
-                 logger: TrainingLogger | None = None):
+                 streak_required: int, keep_last: int = 10):
         super().__init__()
 
         self._dir = promoted_dir
@@ -84,7 +86,6 @@ class PromoteCallback(BaseCallback):
         self._min_episodes = min_episodes
         self._streak_required = streak_required
         self._keep_last = keep_last
-        self._logger = logger
 
         self._last_promote = -cooldown_steps
         self._streak = 0
@@ -109,9 +110,8 @@ class PromoteCallback(BaseCallback):
 
         if win_rate >= self._threshold:
             self._streak += 1
-            print(f"[{datetime.now().strftime('%H:%M:%S')}][promote] "
-                  f"streak {self._streak}/{self._streak_required} "
-                  f"win_rate={win_rate:.1%} step={self.num_timesteps}")
+            log.info(f"promote_streak streak={self._streak}/{self._streak_required}"
+                     f" win_rate={win_rate:.1%} step={self.num_timesteps}")
         else:
             self._streak = 0
 
@@ -122,10 +122,7 @@ class PromoteCallback(BaseCallback):
             self.model.save(os.path.join(self._dir, name))
             self._last_promote = self.num_timesteps
             self._streak = 0
-            print(f"[{datetime.now().strftime('%H:%M:%S')}][promote] "
-                  f"PROMOTED → {full_path}")
-            if self._logger:
-                self._logger.log_promotion(self.num_timesteps, win_rate, full_path)
+            log.info(f"promote step={self.num_timesteps} win_rate={win_rate:.1%} path={full_path}")
 
             # Prune old models, keep only the most recent keep_last
             existing = sorted(
@@ -135,19 +132,16 @@ class PromoteCallback(BaseCallback):
             )
             for old in existing[self._keep_last:]:
                 os.remove(old.path)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}][promote] pruned {old.name}")
+                log.info(f"promote_pruned model={old.name}")
 
 
 class RolloutLogCallback(BaseCallback):
-    def __init__(self, logger: TrainingLogger | None = None, log_every: int = 5):
+    def __init__(self):
         super().__init__()
         self._rollout_wins = []
         self._ep_rewards = []
         self._ep_lens = []
         self._server_rt_ms = []
-        self._logger = logger
-        self._log_every = log_every
-        self._iteration = 0
 
     def _on_step(self) -> bool:
         for info in self.locals.get("infos", []):
@@ -178,16 +172,11 @@ class RolloutLogCallback(BaseCallback):
         self._ep_rewards = []
         self._ep_lens = []
         self._server_rt_ms = []
-        self._iteration += 1
 
-        print(f"[{datetime.now().strftime('%H:%M:%S')}][train] "
-              f"step={self.num_timesteps} "
-              f"rollout_win_rate={win_rate:.1%} "
-              f"server_rt={server_rt:.1f}ms")
-
-        if self._logger and self._iteration % self._log_every == 0:
-            self._logger.log_rollout(self.num_timesteps, win_rate, ep_rew_mean,
-                                     ep_len_mean, entropy, server_rt)
+        log.info(f"rollout step={self.num_timesteps} win_rate={win_rate:.1%}"
+                 f" rew={ep_rew_mean:+.3f} len={ep_len_mean:.1f}"
+                 f" entropy={'-' if entropy is None else f'{entropy:.2f}'}"
+                 f" server_rt_ms={server_rt:.1f}")
 
 
 _stop_count = 0
@@ -197,7 +186,7 @@ def _handle_signal(sig, frame):
     global _stop_count
     _stop_count += 1
     if _stop_count == 1:
-        print("\nGraceful shutdown...")
+        log.info("shutdown_requested")
         raise KeyboardInterrupt
     else:
         sys.exit(1)
@@ -210,8 +199,10 @@ def mask_fn(env: VirusWarEnv) -> np.ndarray:
 def _env_factory(host: str, port: int,
                  credentials: list[tuple[str, str]],
                  opponent: str, log_path: str):
-    """Module-level factory so SubprocVecEnv can pickle it."""
-    env = VirusWarEnv(host, port, credentials, opponent=opponent, log_path=log_path)
+    """Module-level factory so SubprocVecEnv can pickle it (runs in the env's process)."""
+    if multiprocessing.current_process().name != "MainProcess":  # SubprocVecEnv worker
+        setup_logging("rlenv", log_path)
+    env = VirusWarEnv(host, port, credentials, opponent=opponent)
     return Monitor(ActionMasker(env, mask_fn))
 
 
@@ -246,7 +237,6 @@ def main():
                              key=lambda p: int(p.stem.split("_")[2]), reverse=True)
         if checkpoints:
             args.load = str(checkpoints[0])
-            print(f"Auto-loading latest checkpoint: {args.load}")
 
     target_kl = args.target_kl if args.target_kl != 0.0 else None
 
@@ -257,8 +247,8 @@ def main():
 
     os.makedirs(args.save_dir, exist_ok=True)
 
-    log_path = args.log or os.path.join(args.save_dir, "training_log.md")
-    tlog = TrainingLogger(log_path)
+    log_path = args.log or os.path.join(args.save_dir, "train_rl.log")
+    setup_logging("rltrain", log_path)
 
     make = partial(_env_factory, args.host, args.port, creds, args.opponent, log_path)
     if args.n_envs > 1:
@@ -286,12 +276,9 @@ def main():
         model.clip_range = (lambda c: lambda _: c)(args.clip_range)
         model.n_epochs = args.n_epochs
         model.ent_coef = args.ent_coef
-        print(f"Resumed from {args.load} "
-              f"(target_kl={target_kl}, clip_range={args.clip_range}, "
-              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef}, "
-              f"n_envs={args.n_envs})")
-        tlog.log_session_start(args.load, args.opponent, target_kl,
-                               args.clip_range, args.n_epochs, args.ent_coef)
+        log.info(f"session_start loaded={args.load} opponent={args.opponent or 'any'}"
+                 f" target_kl={target_kl} clip_range={args.clip_range}"
+                 f" n_epochs={args.n_epochs} ent_coef={args.ent_coef} n_envs={args.n_envs}")
     else:
         model = MaskablePPO(
             "CnnPolicy",
@@ -308,12 +295,9 @@ def main():
             target_kl=target_kl,
             vf_coef=0.5,
         )
-        print(f"Started fresh training (residual CNN) "
-              f"(target_kl={target_kl}, clip_range={args.clip_range}, "
-              f"n_epochs={args.n_epochs}, ent_coef={args.ent_coef}, "
-              f"n_envs={args.n_envs})")
-        tlog.log_session_start(None, args.opponent, target_kl,
-                               args.clip_range, args.n_epochs, args.ent_coef)
+        log.info(f"session_start loaded=scratch opponent={args.opponent or 'any'}"
+                 f" target_kl={target_kl} clip_range={args.clip_range}"
+                 f" n_epochs={args.n_epochs} ent_coef={args.ent_coef} n_envs={args.n_envs}")
 
     checkpoint_cb = CheckpointCallback(
         save_freq=20_000,
@@ -323,7 +307,7 @@ def main():
 
     callbacks = [
         checkpoint_cb,
-        RolloutLogCallback(logger=tlog),
+        RolloutLogCallback(),
         PromoteCallback(
             args.promoted_dir,
             threshold=float(os.getenv("VIRUSWAR_PROMOTE_THRESHOLD", "0.55")),
@@ -331,7 +315,6 @@ def main():
             min_episodes=int(os.getenv("VIRUSWAR_PROMOTE_MIN_EP", "100")),
             streak_required=int(os.getenv("VIRUSWAR_PROMOTE_STREAK", "3")),
             keep_last=int(os.getenv("VIRUSWAR_PROMOTE_KEEP", "10")),
-            logger=tlog,
         ),
     ]
 
@@ -351,8 +334,7 @@ def main():
         save_path = os.path.join(args.save_dir,
                                  f"rl_bot_{model.num_timesteps}_steps")
         model.save(save_path)
-        print(f"Saved → {save_path}.zip")
-        tlog.log_session_end(model.num_timesteps, f"{save_path}.zip")
+        log.info(f"session_end step={model.num_timesteps} path={save_path}.zip")
 
 
 if __name__ == "__main__":

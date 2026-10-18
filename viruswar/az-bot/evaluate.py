@@ -8,7 +8,7 @@ For every model it checks:
   3. MCTS strength — greedy MCTS vs the random player and vs the untrained seed.
 
 Games use paired random openings (both sides of every opening), like pit().
-Everything is appended to --log as markdown.
+Results are logged to --log, one event line each.
 
 Usage:
     cd viruswar/az-bot
@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import logging
 import random
 import time
 from pathlib import Path
@@ -28,10 +29,12 @@ import viruswar_sim as sim
 from viruswar_sim import TurnResult
 
 from diagnostics import value_dataset, value_metrics
+from log import setup as setup_logging
 from mcts import make_root, run_mcts, get_action_probs
 from net import AZNet, board_to_obs
 from self_play import random_opening
-from training_logger import TrainingLogger
+
+log = logging.getLogger(__name__)
 
 # A player maps a game (current player to move) to an action index y*w + x.
 Player = Callable[[sim.VirusWarGame], int]
@@ -76,9 +79,9 @@ def play_game(game: sim.VirusWarGame, players: list[Player]) -> tuple[int, int]:
             game.advance_turn()
 
 
-def match(name: str, a: Player, b: Player, n_games: int, opening_moves: int,
-          rng: np.random.Generator, log: TrainingLogger) -> float:
-    """Paired-opening match; returns a's win rate."""
+def match(model: str, kind: str, a: Player, b: Player, n_games: int, opening_moves: int,
+          rng: np.random.Generator) -> float:
+    """Paired-opening match of `model` (player a) in a match `kind`; returns a's win rate."""
     n_pairs = (n_games + 1) // 2
     wins = 0
     side_wins = [0, 0]  # games won by P0 / P1, regardless of who played them
@@ -90,21 +93,19 @@ def match(name: str, a: Player, b: Player, n_games: int, opening_moves: int,
             winner, sub_moves = play_game(opening.copy(), players)
             wins += winner == a_player
             side_wins[winner] += 1
-            log.log_line(f"eval game  {name}  pair={pair + 1}  a_as=P{a_player}"
-                         f"  winner=P{winner} ({'a' if winner == a_player else 'b'})"
-                         f"  sub_moves={sub_moves}")
+            log.info(f"game model={model} match={kind} pair={pair + 1} a_as=P{a_player}"
+                     f" winner=P{winner} result={'a' if winner == a_player else 'b'}"
+                     f" sub_moves={sub_moves}")
     wr = wins / (2 * n_pairs)
-    log.log_line(f"eval match  {name}  a_win_rate={wr:.1%}  games={2 * n_pairs}"
-                 f"  side_wins P0={side_wins[0]} P1={side_wins[1]}"
-                 f"  time={time.perf_counter() - t0:.0f}s")
-    print(f"  {name}: a_win_rate={wr:.1%}  (P0 won {side_wins[0]}, P1 won {side_wins[1]})")
+    log.info(f"match model={model} match={kind} a_win_rate={wr:.1%} games={2 * n_pairs}"
+             f" p0_wins={side_wins[0]} p1_wins={side_wins[1]}"
+             f" secs={time.perf_counter() - t0:.0f}")
     return wr
 
 
-def value_check(name: str, net: AZNet, data, log: TrainingLogger) -> None:
+def value_check(model: str, net: AZNet, data) -> None:
     line, _ = value_metrics(net, *data)
-    log.log_line(f"eval value  {name}  {line}")
-    print(f"  value: {line}")
+    log.info(f"value model={model} {line}")
 
 
 def default_models() -> list[Path]:
@@ -127,42 +128,40 @@ def main():
     parser.add_argument("--value-games", type=int, default=200,
                         help="Random-play games used for the value check")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--log", default="models/eval_log_az.md")
+    parser.add_argument("--log", default="models/eval_az.log",
+                        help="Log file (events, one line each)")
     args = parser.parse_args()
 
-    log = TrainingLogger(args.log)
+    setup_logging("azeval", args.log)
     paths = [Path(p) for p in args.models] if args.models else default_models()
     seed_path = Path(args.seed_model)
     seed_net = AZNet.load(str(seed_path)).eval() if seed_path.exists() else None
 
-    log.log_note(f"eval start  models={[p.name for p in paths]}  seed_model="
-                 f"{seed_path.name if seed_net else 'missing'}  games={args.games}"
-                 f"  sims={args.sims}  opening={args.opening_moves}"
-                 f"  value_games={args.value_games}  seed={args.seed}")
+    log.info(f"start models={','.join(p.name for p in paths)} seed_model="
+             f"{seed_path.name if seed_net else 'missing'} games={args.games}"
+             f" sims={args.sims} opening={args.opening_moves}"
+             f" value_games={args.value_games} seed={args.seed}")
 
-    print(f"Building value dataset from {args.value_games} random games...")
     data = value_dataset(args.value_games, random.Random(args.seed))
-    log.log_line(f"eval value_dataset  positions={len(data[1])}"
-                 f"  P_win_rate_for_mover={np.mean(data[1] > 0):.1%}")
+    log.info(f"value_dataset positions={len(data[1])}"
+             f" mover_win_rate={np.mean(data[1] > 0):.1%}")
 
     for path in paths:
-        name = path.name
-        print(f"\n== {name}")
+        model = path.stem
         net = AZNet.load(str(path)).eval()
-        value_check(name, net, data, log)
+        value_check(model, net, data)
 
         rng = np.random.default_rng(args.seed)
         prng = random.Random(args.seed)
-        match(f"{name} policy-only vs random", policy_player(net), random_player(prng),
-              args.games, args.opening_moves, rng, log)
-        match(f"{name} mcts{args.sims} vs random", mcts_player(net, args.sims),
-              random_player(prng), args.games, args.opening_moves, rng, log)
+        match(model, "policy_vs_random", policy_player(net), random_player(prng),
+              args.games, args.opening_moves, rng)
+        match(model, f"mcts{args.sims}_vs_random", mcts_player(net, args.sims),
+              random_player(prng), args.games, args.opening_moves, rng)
         if seed_net is not None and path.resolve() != seed_path.resolve():
-            match(f"{name} mcts{args.sims} vs seed mcts{args.sims}", mcts_player(net, args.sims),
-                  mcts_player(seed_net, args.sims), args.games, args.opening_moves, rng, log)
+            match(model, f"mcts{args.sims}_vs_seed", mcts_player(net, args.sims),
+                  mcts_player(seed_net, args.sims), args.games, args.opening_moves, rng)
 
-    log.log_line("eval done")
-    print(f"\nDone. Results appended to {args.log}")
+    log.info("done")
 
 
 if __name__ == "__main__":

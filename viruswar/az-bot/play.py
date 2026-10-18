@@ -15,9 +15,13 @@ Roles:
     latest  — always the newest promoted model
     prev:N  — N-th newest (0=latest, 1=second, ...)
     random  — picks randomly on each reload
+
+Ctrl+C finishes the running games, then exits (games offered meanwhile are
+resigned); a second Ctrl+C exits at once.
 """
 
 import argparse
+import logging
 import os
 import random
 import re
@@ -25,8 +29,6 @@ import signal
 import sys
 import threading
 import time
-import traceback
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -36,26 +38,25 @@ load_dotenv()
 
 import viruswar_sim as sim
 from bot_client import ServerConnection
+from log import setup as setup_logging
 from mcts import make_root, run_mcts, get_action_probs, MCTSNode
-from net import AZNet, board_to_obs
-from training_logger import TrainingLogger
+from net import AZNet
+
+log = logging.getLogger(__name__)
 
 N_SIMS = int(os.getenv("AZ_N_SIMS_PLAY", "400"))
-# A single move slower than this is logged: the server drops clients that stay
-# silent for INACTIVE_MAX_MS (5 min), so slow moves explain disconnects.
+# A single sub-move slower than this is logged as a warning
 SLOW_MOVE_SECS = float(os.getenv("AZ_SLOW_MOVE_SECS", "10"))
+RECONNECT_SECS = 3
 
-_RE_FOUND = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
-_RE_GO    = re.compile(r"go:([0-4]+):(\d+):(\d+):")
-_RE_WIN   = re.compile(r"win:(\d+):")
-_RE_LOSE  = re.compile(r"lose:(\d+):")
+_RE_FOUND  = re.compile(r"^found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
+_RE_GO     = re.compile(r"^go:([0-4]+):(\d+):(\d+):")
+_RE_RESULT = re.compile(r"^(win|lose):(\d+):(?:(\w+):)?")
+_RE_ABORT  = re.compile(r"^abort:(\d+):")
+_RE_WRONG  = re.compile(r"^wrongstep:(\d+):")
 
 _shutdown_requested = False
 _shutdown_count     = 0
-
-
-def _ts() -> str:
-    return datetime.now().strftime("%H:%M:%S")
 
 
 def _handle_signal(sig, frame):
@@ -63,9 +64,9 @@ def _handle_signal(sig, frame):
     _shutdown_count += 1
     if _shutdown_count == 1:
         _shutdown_requested = True
-        print(f"\n[{_ts()}][play] Graceful shutdown — finishing active games...")
+        log.info("shutdown_requested mode=finish_active_games")
     else:
-        print(f"\n[{_ts()}][play] Forced shutdown.")
+        log.info("shutdown_forced")
         sys.exit(0)
 
 
@@ -99,14 +100,13 @@ class BotSlot:
     _LOG_EVERY = 20
 
     def __init__(self, login: str, password: str, role: str,
-                 host: str, port: int, promoted_dir: str, log_path: str = ""):
+                 host: str, port: int, promoted_dir: str):
         self.login        = login
         self.password     = password
         self.role         = role
         self.host         = host
         self.port         = port
         self.promoted_dir = promoted_dir
-        self._log_path    = log_path
 
         self._net: AZNet | None = None
         self._net_path: str | None = None
@@ -120,18 +120,7 @@ class BotSlot:
 
         self._conn: ServerConnection | None = None
         self._conn_lock = threading.Lock()
-
-    # ── logging ───────────────────────────────────────────────────────────
-
-    def _log(self, msg: str) -> None:
-        if not self._log_path:
-            return
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(f"- `{ts}` {msg}\n")
-        except OSError:
-            pass
+        self._active: dict[int, GameState] = {}
 
     # ── model management ──────────────────────────────────────────────────
 
@@ -161,16 +150,18 @@ class BotSlot:
                 self._slot_model = path.stem
             self._slot_wins  = 0
             self._slot_games = 0
-            print(f"[{_ts()}][{self.login}] loaded {path.name}")
-            self._log(f"play [{self.login}/{self.role}] model_loaded  model={path.name}")
+            log.info(f"model_loaded login={self.login} role={self.role} model={path.name}")
             return True
         except Exception as e:
-            print(f"[{_ts()}][{self.login}] load failed: {e}")
-            self._log(f"play [{self.login}/{self.role}] model_load_failed  path={path}  error={e!r}")
+            log.error(f"model_load_failed login={self.login} role={self.role} path={path} error={e!r}")
             return False
 
     def check_reload(self):
         self._try_load()
+
+    def is_idle(self) -> bool:
+        """No game in progress (read by the main thread during shutdown)."""
+        return not self._active
 
     def interrupt(self):
         with self._conn_lock:
@@ -183,9 +174,16 @@ class BotSlot:
     # ── inference ─────────────────────────────────────────────────────────
 
     def _pick_move(self, gs: GameState, board: str, moves_remaining: int) -> int:
-        if moves_remaining == 3:
-            # New turn: sync game state with server's authoritative board
-            gs.game.init_from_board(board)
+        in_sync = board == gs.game.serialize() and moves_remaining == gs.game.moves_remaining()
+        if moves_remaining == 3 or not in_sync:
+            # New turn: start from the server's authoritative board. Mid-turn the local game
+            # must already match it; if not (e.g. after a wrongstep:), rebuild it the same way
+            # instead of searching a wrong tree
+            if moves_remaining != 3:
+                log.warning(f"desync login={self.login} moves_remaining={moves_remaining}"
+                            f" local_moves_remaining={gs.game.moves_remaining()}")
+            gs.game = sim.VirusWarGame(gs.w, gs.h)
+            gs.game.init_from_board(board, moves_remaining)
             gs.root = make_root(gs.game)
 
         with self._net_lock:
@@ -207,71 +205,94 @@ class BotSlot:
         gs.moves      += 1
         gs.think_secs += secs
         if secs > SLOW_MOVE_SECS:
-            self._log(f"play [{self.login}] slow_move  move={gs.moves}  time={secs:.1f}s"
-                      f"  sims={N_SIMS}")
+            log.warning(f"slow_move login={self.login} move={gs.moves} secs={secs:.1f} sims={N_SIMS}")
         return action
 
-    def _log_result(self, game_id: int, gs: GameState | None, won: bool) -> None:
-        result = "win" if won else "loss"
+    def _log_result(self, game_id: int, gs: GameState | None, result: str, cause: str) -> None:
         if gs is None:
-            self._log(f"play [{self.login}/{self.role}] {result}  game={game_id}  (untracked game)")
+            log.info(f"game_over login={self.login} id={game_id} result={result}"
+                     f" cause={cause} tracked=no")
             return
         avg_ms = gs.think_secs / gs.moves * 1000 if gs.moves else 0.0
-        self._log(f"play [{self.login}/{self.role}] {result}  game={game_id}"
-                  f"  opponent={gs.opponent}  my_moves={gs.moves}"
-                  f"  duration={time.monotonic() - gs.started:.0f}s  think_avg={avg_ms:.0f}ms"
-                  f"  model={'->'.join(gs.models) or self._slot_model}")
+        log.info(f"game_over login={self.login} id={game_id} result={result} cause={cause}"
+                 f" opponent={gs.opponent} my_moves={gs.moves}"
+                 f" secs={time.monotonic() - gs.started:.0f} think_avg_ms={avg_ms:.0f}"
+                 f" model={'->'.join(gs.models) or self._slot_model}")
+
+    def _count_result(self, won: bool) -> None:
+        self._games_played += 1
+        self._slot_games   += 1
+        if won:
+            self._wins      += 1
+            self._slot_wins += 1
+        if self._slot_games % self._LOG_EVERY == 0:
+            log.info(f"winrate login={self.login} role={self.role}"
+                     f" win_rate={self._slot_wins / self._slot_games:.1%}"
+                     f" games={self._slot_games} model={self._slot_model}")
 
     # ── game loop ─────────────────────────────────────────────────────────
 
     def run(self):
+        waiting_logged = False
         while not _shutdown_requested:
             if self._try_load():
                 break
-            print(f"[{_ts()}][{self.login}] waiting for models in {self.promoted_dir}...")
+            if not waiting_logged:
+                log.info(f"waiting_for_models login={self.login} dir={self.promoted_dir}")
+                waiting_logged = True
             time.sleep(5)
 
         if _shutdown_requested:
             return
 
-        self._log(f"play [{self.login}/{self.role}] slot_start  model={self._slot_model}"
-                  f"  sims={N_SIMS}  server={self.host}:{self.port}")
+        log.info(f"slot_start login={self.login} role={self.role} model={self._slot_model}"
+                 f" sims={N_SIMS} server={self.host}:{self.port}")
 
         with self._conn_lock:
             self._conn = ServerConnection(self.host, self.port, self.login, self.password)
             conn = self._conn
 
-        active: dict[int, GameState] = {}
+        active = self._active
 
         while not _shutdown_requested:
             try:
                 conn.connect()
             except (ConnectionError, OSError) as e:
-                msg = f"connect failed: {e}"
-                print(f"[{_ts()}][{self.login}] {msg}. Retry in 3s...")
-                self._log(f"play [{self.login}] reconnect  {msg}")
-                time.sleep(3)
+                log.warning(f"connect_failed login={self.login} error={e!r} retry_secs={RECONNECT_SECS}")
+                time.sleep(RECONNECT_SECS)
                 continue
 
             if active:
-                self._log(f"play [{self.login}] dropped_games  count={len(active)}"
-                          f"  ids={sorted(active)}  (lost with the previous connection)")
+                log.warning(f"dropped_games login={self.login} count={len(active)}"
+                            f" ids={','.join(map(str, sorted(active)))} reason=connection_lost")
             active.clear()
-            self._log(f"play [{self.login}] connected")
+            nomatch_sent = False
 
             try:
                 while True:
                     msg = conn.read_message()
+                    if _shutdown_requested and not nomatch_sent:
+                        # Sent from this thread, which owns the socket; a found: already
+                        # on its way is resigned below
+                        conn.stop_matching()
+                        nomatch_sent = True
 
                     m = _RE_FOUND.match(msg)
                     if m:
                         game_id = int(m.group(1))
                         w, h    = int(m.group(3)), int(m.group(4))
-                        if not _shutdown_requested:
-                            active[game_id] = GameState(w, h, m.group(2))
-                            print(f"[{_ts()}][{self.login}] game {game_id} vs {m.group(2)}")
-                            self._log(f"play [{self.login}] game_start  game={game_id}"
-                                      f"  opponent={m.group(2)}  board={w}x{h}")
+                        reason  = ("shutdown" if _shutdown_requested
+                                   else "board_size" if (w, h) != (self._net.w, self._net.h)
+                                   else None)
+                        if reason:
+                            # Don't leave the opponent waiting on a game we won't play
+                            conn.resign(game_id)
+                            log.info(f"resign login={self.login} id={game_id} reason={reason}"
+                                     f" board={w}x{h}")
+                            continue
+                        active[game_id] = GameState(w, h, m.group(2))
+                        log.info(f"game_start login={self.login} id={game_id}"
+                                 f" opponent={m.group(2)} board={w}x{h}")
                         continue
 
                     m = _RE_GO.match(msg)
@@ -281,80 +302,55 @@ class BotSlot:
                         gs = active.get(game_id)
                         if gs is None:
                             continue
-
                         action = self._pick_move(gs, board, moves_remaining)
                         conn.send_move(action % gs.w, action // gs.w, game_id)
                         continue
 
-                    if msg.startswith("abort:"):
-                        game_id_str = msg.split(":")[1]
-                        active.pop(int(game_id_str), None)
-                        print(f"[{_ts()}][{self.login}] abort game {game_id_str}")
-                        self._log(f"play [{self.login}] abort  game={game_id_str}")
+                    m = _RE_RESULT.match(msg)
+                    if m:
+                        result, game_id = m.group(1), int(m.group(2))
+                        gs = active.pop(game_id, None)
+                        self._log_result(game_id, gs, result, m.group(3) or "-")
+                        if gs is not None:  # not for a game resigned unplayed
+                            self._count_result(result == "win")
                         if _shutdown_requested and not active:
                             break
                         continue
 
-                    m = _RE_WIN.match(msg)
+                    m = _RE_ABORT.match(msg)
                     if m:
-                        self._log_result(int(m.group(1)), active.pop(int(m.group(1)), None), True)
-                        self._games_played += 1
-                        self._wins         += 1
-                        self._slot_games   += 1
-                        self._slot_wins    += 1
-                        print(f"[{_ts()}][{self.login}] WIN  "
-                              f"wr={self._wins/self._games_played:.1%} "
-                              f"({self._wins}/{self._games_played})")
-                        if self._slot_games % self._LOG_EVERY == 0:
-                            self._log(f"play [{self.login}/{self.role}] winrate"
-                                      f"  wr={self._slot_wins/self._slot_games:.1%}"
-                                      f"  games={self._slot_games}"
-                                      f"  model={self._slot_model}")
+                        active.pop(int(m.group(1)), None)
+                        log.info(f"abort login={self.login} id={m.group(1)}")
                         if _shutdown_requested and not active:
                             break
                         continue
 
-                    m = _RE_LOSE.match(msg)
+                    m = _RE_WRONG.match(msg)
                     if m:
-                        self._log_result(int(m.group(1)), active.pop(int(m.group(1)), None), False)
-                        self._games_played += 1
-                        self._slot_games   += 1
-                        print(f"[{_ts()}][{self.login}] LOSS "
-                              f"wr={self._wins/self._games_played:.1%} "
-                              f"({self._wins}/{self._games_played})")
-                        if self._slot_games % self._LOG_EVERY == 0:
-                            self._log(f"play [{self.login}/{self.role}] winrate"
-                                      f"  wr={self._slot_wins/self._slot_games:.1%}"
-                                      f"  games={self._slot_games}"
-                                      f"  model={self._slot_model}")
-                        if _shutdown_requested and not active:
-                            break
+                        log.warning(f"wrongstep login={self.login} id={m.group(1)}")
                         continue
 
             except (ConnectionError, OSError) as e:
                 if _shutdown_requested:
                     break
-                msg = f"connection lost: {e}"
-                print(f"[{_ts()}][{self.login}] {msg}. Reconnecting in 3s...")
-                self._log(f"play [{self.login}] reconnect  {msg}")
+                log.warning(f"connection_lost login={self.login} error={e!r}"
+                            f" retry_secs={RECONNECT_SECS}")
                 conn.disconnect()
-                time.sleep(3)
+                time.sleep(RECONNECT_SECS)
             except Exception:
                 # Bug in move selection etc.: record it instead of silently killing the thread
-                print(f"[{_ts()}][{self.login}] unexpected error, reconnecting in 3s")
-                traceback.print_exc()
-                self._log(f"play [{self.login}] error  reconnecting in 3s\n\n```\n"
-                          f"{traceback.format_exc()}```\n")
+                log.exception(f"error login={self.login} retry_secs={RECONNECT_SECS}")
                 conn.disconnect()
-                time.sleep(3)
+                time.sleep(RECONNECT_SECS)
             else:
                 break
 
         conn.disconnect()
+        active.clear()
         with self._conn_lock:
             self._conn = None
-        self._log(f"play [{self.login}/{self.role}] slot_stop  games={self._games_played}"
-                  f"  wins={self._wins}")
+        log.info(f"slot_stop login={self.login} role={self.role}"
+                 f" games={self._games_played} wins={self._wins}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -364,7 +360,8 @@ def main():
     parser.add_argument("--host", default=os.getenv("VIRUSWAR_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("VIRUSWAR_PORT", "1234")))
     parser.add_argument("--promoted-dir", default="models/promoted")
-    parser.add_argument("--log", default="models/play_log_az.md")
+    parser.add_argument("--log", default="models/play_az.log",
+                        help="Log file (events, one line each)")
     parser.add_argument("--bot", action="append", dest="bots", default=[],
                         metavar="LOGIN:PASSWORD:ROLE",
                         help="Bot spec: login:password:latest | login:password:prev:N "
@@ -378,6 +375,8 @@ def main():
             "  --bot azbot_prev:azbot_prev:prev:1"
         )
 
+    setup_logging("azbot", args.log)
+
     slots: list[BotSlot] = []
     for spec in args.bots:
         parts = spec.split(":", 3)
@@ -385,13 +384,11 @@ def main():
             parser.error(f"Invalid bot spec: {spec!r}")
         login, password = parts[0], parts[1]
         role = ":".join(parts[2:])
-        slots.append(BotSlot(login, password, role,
-                             args.host, args.port, args.promoted_dir, args.log))
+        slots.append(BotSlot(login, password, role, args.host, args.port, args.promoted_dir))
 
     os.makedirs(args.promoted_dir, exist_ok=True)
-    TrainingLogger(args.log).log_line(
-        f"play start  bots={[s.login + '/' + s.role for s in slots]}"
-        f"  promoted_dir={args.promoted_dir}  sims={N_SIMS}")
+    log.info(f"start bots={','.join(s.login + '/' + s.role for s in slots)}"
+             f" promoted_dir={args.promoted_dir} sims={N_SIMS}")
 
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -402,29 +399,28 @@ def main():
 
     # Slots load the newest model on start, so only later changes trigger a reload
     last_snapshot = [str(p) for p in get_promoted_models(args.promoted_dir)]
-    try:
-        while True:
-            time.sleep(5)
-            if _shutdown_requested:
-                break
-            current = [str(p) for p in get_promoted_models(args.promoted_dir)]
-            if current != last_snapshot:
-                last_snapshot = current
-                print(f"[{_ts()}][play] promoted folder: {len(current)} models — reloading bots")
-                TrainingLogger(args.log).log_line(
-                    f"play promoted_changed  models={len(current)}"
-                    f"  newest={Path(current[0]).name if current else '-'}")
-                for s in slots:
-                    s.check_reload()
-    except KeyboardInterrupt:
-        pass
+    next_check = time.monotonic() + 5
+    while not _shutdown_requested:
+        time.sleep(0.5)
+        if time.monotonic() < next_check:
+            continue
+        next_check = time.monotonic() + 5
+        current = [str(p) for p in get_promoted_models(args.promoted_dir)]
+        if current != last_snapshot:
+            last_snapshot = current
+            log.info(f"promoted_changed models={len(current)}"
+                     f" newest={Path(current[0]).name if current else '-'}")
+            for s in slots:
+                s.check_reload()
 
-    for s in slots:
-        s.interrupt()
-    for t in threads:
-        t.join(timeout=10)
-    print(f"[{_ts()}][play] stopped.")
-    TrainingLogger(args.log).log_line("play stopped")
+    # Graceful shutdown: a slot leaves on its own after its last game ends; an idle
+    # slot is blocked reading its socket, so close that to let it exit
+    while any(t.is_alive() for t in threads):
+        for s in slots:
+            if s.is_idle():
+                s.interrupt()
+        time.sleep(0.5)
+    log.info("stopped")
 
 
 if __name__ == "__main__":

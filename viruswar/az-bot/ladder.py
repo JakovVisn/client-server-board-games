@@ -10,8 +10,9 @@ Every opponent plays the same paired random openings (both sides of each),
 greedy MCTS with the pit's simulation count. Games run in parallel worker
 processes; stop training first or both will fight over the CPU.
 
-Results go to --log: one line per opponent with win rate, 95% interval and
-the implied Elo difference, then a summary table.
+Each finished match is logged (--log, one event line per opponent: win rate,
+95% interval, implied Elo difference); the summary table is appended to the
+Markdown report (--report).
 
 Any player can also be an RL bot model (rl-bot promoted_*.zip): it plays its
 policy's best legal move, without search, as rl-bot/play.py does. With an RL
@@ -28,6 +29,7 @@ Usage:
 """
 
 import argparse
+import logging
 import math
 import os
 import time
@@ -45,9 +47,11 @@ from mcts import get_action_probs, make_root, run_mcts
 from net import AZNet, board_to_obs
 from parallel import make_executor
 from self_play import _apply, random_opening_actions, replay_opening
-from training_logger import TrainingLogger
+from log import append_report, setup as setup_logging
 
 RANDOM = "random"
+
+log = logging.getLogger(__name__)
 
 
 # ── Opponent selection ────────────────────────────────────────────────────────
@@ -62,9 +66,17 @@ def pick_opponents(target: Path, promoted: list[Path], picks: int) -> list[str]:
     The random bot plus `picks` promoted models spread evenly over the history
     before the target: always the seed (oldest) and the one just before it.
     """
-    older = [p for p in promoted if p.stem < target.stem]
+    # By the games count in the name, not the file name: az_… checkpoints and
+    # promoted_… models would otherwise compare as unrelated strings
+    older = [p for p in promoted if _games_in_name(p) < _games_in_name(target)]
     idx = sorted({int(round(i)) for i in np.linspace(0, len(older) - 1, picks)}) if older else []
     return [RANDOM] + [str(older[i]) for i in idx]
+
+
+def _games_in_name(path: Path) -> int:
+    """The number at the end of az_NNNNNNNNNN / promoted_NNNNNNNNNN (games or RL steps)."""
+    digits = path.stem.rsplit("_", 1)[-1]
+    return int(digits) if digits.isdigit() else -1
 
 
 def _is_rl(path: str | Path) -> bool:
@@ -191,7 +203,10 @@ def main():
     parser.add_argument("--workers", type=int,
                         default=int(os.getenv("AZ_WORKERS", str(max(1, (os.cpu_count() or 2) - 2)))))
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--log", default="models/ladder_log_az.md")
+    parser.add_argument("--log", default="models/ladder_az.log",
+                        help="Log file (events, one line each)")
+    parser.add_argument("--report", default="models/ladder_az.md",
+                        help="Markdown report the summary table is appended to")
     args = parser.parse_args()
 
     promoted = promoted_models(args.promoted_dir)
@@ -205,13 +220,11 @@ def main():
         raise SystemExit(f"no promoted models in {args.promoted_dir}")
     opponents = args.opponents or pick_opponents(target, promoted, args.picks)
 
-    log = TrainingLogger(args.log)
+    setup_logging("ladder", args.log)
     n_pairs = (args.games + 1) // 2
-    log.log_note(f"ladder start  model={_name(target)}  opponents={[_name(o) for o in opponents]}"
-                 f"  games={2 * n_pairs}  sims={args.sims}  opening={args.opening_moves}"
-                 f"  workers={args.workers}  seed={args.seed}")
-    print(f"Ladder: {_name(target)} vs {[_name(o) for o in opponents]}, "
-          f"{2 * n_pairs} games each, {args.sims} sims")
+    log.info(f"start model={_name(target)} opponents={','.join(_name(o) for o in opponents)}"
+             f" games={2 * n_pairs} sims={args.sims} opening={args.opening_moves}"
+             f" workers={args.workers} seed={args.seed}")
 
     # The same openings for every opponent, so their results are comparable
     rng = np.random.default_rng(args.seed)
@@ -243,33 +256,35 @@ def main():
             t["secs"] += secs
             done += 1
             if done % 20 == 0:
-                print(f"  {done}/{total} games  ({time.perf_counter() - t0:.0f}s)")
+                log.info(f"progress games={done}/{total} secs={time.perf_counter() - t0:.0f}")
             if t["games"] == 2 * n_pairs:
-                results[opponent] = _report(log, target, opponent, t)
+                results[opponent] = _report(target, opponent, t)
     except KeyboardInterrupt:
-        log.log_line("ladder interrupted")
+        log.info("interrupted")
         raise
     finally:
         executor.shutdown(cancel_futures=True)
 
     rows = [f"| {_name(o)} | {r['wr']:.1%} | {r['lo']:.0%}–{r['hi']:.0%} | {r['elo']:+.0f} |"
             for o, r in ((o, results[o]) for o in opponents if o in results)]
-    log.log_note(f"ladder done  model={_name(target)}  time={time.perf_counter() - t0:.0f}s\n\n"
-                 "| opponent | win rate | 95% interval | Elo diff |\n|---|---|---|---|\n"
-                 + "\n".join(rows))
-    print(f"\nDone. Results appended to {args.log}")
+    secs = time.perf_counter() - t0
+    append_report(args.report, f"Ladder: {_name(target)}",
+                  f"{2 * n_pairs} games per opponent, {args.sims} sims, opening {args.opening_moves},"
+                  f" seed {args.seed}, {secs:.0f} s\n\n"
+                  "| opponent | win rate | 95% interval | Elo diff |\n|---|---|---|---|\n"
+                  + "\n".join(rows))
+    log.info(f"done model={_name(target)} secs={secs:.0f} report={args.report}")
 
 
-def _report(log: TrainingLogger, target: Path, opponent: str, t: dict) -> dict:
+def _report(target: Path, opponent: str, t: dict) -> dict:
     n = t["games"]
     wr = t["wins"] / n
     lo, hi = wilson(t["wins"], n)
     elo = elo_diff(wr, n)
-    log.log_line(f"ladder match  {_name(target)} vs {_name(opponent)}  win_rate={wr:.1%}"
-                 f"  ci95={lo:.1%}-{hi:.1%}  elo={elo:+.0f}  games={n}"
-                 f"  side_wins P0={t['side'][0]} P1={t['side'][1]}"
-                 f"  len_mean={t['sub_moves'] / n:.0f}  game_secs={t['secs'] / n:.1f}")
-    print(f"  vs {_name(opponent)}: {wr:.1%}  (95% {lo:.0%}–{hi:.0%}, Elo {elo:+.0f})")
+    log.info(f"match model={_name(target)} opponent={_name(opponent)} win_rate={wr:.1%}"
+             f" ci95={lo:.1%}-{hi:.1%} elo={elo:+.0f} games={n}"
+             f" p0_wins={t['side'][0]} p1_wins={t['side'][1]}"
+             f" len_mean={t['sub_moves'] / n:.0f} game_secs={t['secs'] / n:.1f}")
     return {"wr": wr, "lo": lo, "hi": hi, "elo": elo}
 
 
