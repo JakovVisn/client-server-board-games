@@ -14,7 +14,9 @@ This document covers what is the same for every game. Each game describes what f
 - UTF-8 text, **one message per line**, terminated by `\n`.
 - A message is a command name followed by colon-separated fields, and **always ends with a colon**: `step:3:4:17:`.
 - Leading and trailing whitespace is trimmed and empty lines are ignored.
-- Unrecognised lines are answered with `wrongcmd:`.
+- Unrecognised lines are answered with `wrongcmd:`, including numbers that are too long.
+- A line may be at most 4096 bytes; a client that sends more without a newline is disconnected.
+- A connection must log in with a valid `mbclient:` within 10 s, or it is closed (an invalid line before that only gets `wrongcmd:`). After a login error, any further lines in the same packet are ignored.
 
 ## Game model
 
@@ -38,6 +40,7 @@ The server runs any game that implements `AbstractGame` (`server/abstract_game.h
 | `mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H:TARGET:TIME:` | first line | Same, and ask for a [time control](#time-control); `TARGET` may be empty: `…:10:10::game300+5:` |
 | `step:X:Y:GAMEID:` | after `go:` for that game | One sub-move on cell `(X, Y)` |
 | `resign:GAMEID:` | any time during that game | Give up the game: you lose with cause `resign` |
+| `nomatch:` | after logging in | No new games: the ones in progress are played to the end, then the client may disconnect |
 | `pong:` | after `ping:` | Keep-alive answer |
 | `ping:` | any time | Server answers `pong:` |
 
@@ -112,8 +115,9 @@ stateDiagram-v2
    - the game is over: the winner gets `win:` and the loser gets `lose:`.
 
    A game can also end by timeout, resignation or disconnect; see [How a game ends](#how-a-game-ends).
-4. **After the game** both clients stay logged in and **return to the matchmaking pool**, so a new game may start without a new login. The Qt client disconnects after each game; bots stay connected.
+4. **After the game** both clients stay logged in and **return to the matchmaking pool**, so a new game may start without a new login. A human is not matched again for 2 s, so a client that leaves after each game (the Qt client does) is gone before a new game could start. Bots stay connected and are matched again at once.
 5. **Leaving mid-game.** Send `resign:` first: you get `lose:…:resign:` and your opponent `win:…:resign:`. If the connection just drops, the opponent wins with cause `disconnect`. The Qt client asks for confirmation and resigns.
+6. **Shutting down gracefully.** Send `nomatch:`: the server stops matching the client, which finishes its current games and then disconnects. The bots do this on Ctrl+C. There is no way back: log in again to be matched again.
 
 ### How a game ends
 
@@ -181,7 +185,7 @@ alice C: pong:
 ## Keep-alive and inactivity
 
 - The server sends `ping:` after **10 s** without activity from a client and expects `pong:`.
-- A client is disconnected after **300 s** without activity. Only `step:` and `pong:` count as activity.
+- A client is disconnected after **300 s** without activity. Only `step:`, `resign:`, `nomatch:` and `pong:` count as activity.
 - A client that answers every `ping:` is never disconnected, even if it never moves. In a game, the [time control](#time-control) ends that: the player who stops moving loses on time.
 
 ## Time control
@@ -197,7 +201,7 @@ Each game has a time control, written in one word:
 
 For example `turn60`, `game300`, `game300+5`. Limits: `turn` 1–3600 s, `game` 1–86400 s, increment up to 3600 s.
 
-- **Choosing.** A client may ask for one in `mbclient:` (`TIME`). It is matched only with clients that asked for the same time control or for none. A client that asks for none accepts any: the game uses the other player's choice, or the server default when neither chose. The default is `turn60`; the server's `--time-control` option changes it.
+- **Choosing.** A client may ask for one in `mbclient:` (`TIME`); asking for `none` counts as a choice too. It is matched only with clients that chose the same, or that sent no `TIME` at all. A client without `TIME` accepts any time control: the game uses the other player's choice, or the server default when neither chose. The default is `turn60`; the server's `--time-control` option changes it.
 - **The clock** of the player to move runs from the moment the server sends the `go:` that starts their turn. It keeps running between sub-moves and through `wrongstep:`. With `gameN+I` the increment is added when the player completes the turn.
 - **Time left** is reported in every `go:` as `MYTIME:OPPTIME:` in milliseconds. For `turnN`, `OPPTIME` is the full limit the opponent will get. A game with `none` sends `go:` without these fields.
 - **Running out of time** loses the game with cause `timeout`: `win:GAMEID:timeout:` and `lose:GAMEID:timeout:`, bots included.
@@ -206,9 +210,9 @@ The extra fields are appended at the end of `found:` and `go:`, so a client that
 
 ## Matchmaking
 
-Every pass considers only logged-in clients that are not in a game. Bot accounts stay eligible while they play, since they can be in many games at once. A bot matched as a pass 3 seeker is the exception: it waits for that game to end.
+Every pass considers only logged-in clients that are not in a game and have not sent `nomatch:`. Bot accounts stay eligible while they play, since they can be in many games at once. A bot matched as a pass 3 seeker is the exception: it waits for that game to end.
 
-1. **Preferred opponents.** `TARGET` lists the logins you want to play: `bob`, `bob/3` (up to 3 simultaneous games with bob) or `bob/3,carol`. The default limit is 1. A bot that requests a human is matched only if that human has no preferences or lists the bot. `TARGET` can only follow `GAME:W:H`, so spell them out even for the defaults: `mbclient:2:alice:secret:viruswar:10:10:bob:`.
+1. **Preferred opponents.** `TARGET` lists the logins you want to play: `bob`, `bob/3` (up to 3 simultaneous games with bob) or `bob/3,carol`. The default limit is 1. Both sides must agree: a target that has preferences of its own is matched only if it lists the requester. `TARGET` can only follow `GAME:W:H`, so spell them out even for the defaults: `mbclient:2:alice:secret:viruswar:10:10:bob:`.
 2. **Random human vs human**, for humans without preferences.
 3. **Seekers vs league bots.** Clients without preferences and without an auto limit are matched against bot accounts that have free auto slots (`autoLimit`).
 

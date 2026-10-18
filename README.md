@@ -58,7 +58,40 @@ python3 -m venv .venv
 ln -s ../../build/server/viruswar_sim.*.so az-bot/    # the same for rl-bot/
 ```
 
-Build `viruswar_sim` with the same Python version as the venv, or it won't import.
+`viruswar_sim` needs pybind11, which the venv installs. Once `viruswar/.venv` exists, CMake builds the module for the venv's Python and takes pybind11 from it, so configure and build again (`cmake -B build && cmake --build build`). Without pybind11 it prints a warning and skips the module.
+
+### Tests
+
+```bash
+(cd build && ctest --output-on-failure)            # C++: game rules, time controls, matchmaking, client protocol and clock
+cd viruswar && .venv/bin/python -m pytest tests   # Python: log format, server connection, AZ bot internals
+```
+
+The Python tests need the built `viruswar_sim` (see above); none of them start a server or a bot.
+
+---
+
+## Logging
+
+Every program logs in one format, so their logs read and grep the same way:
+
+```
+2026-10-18 14:03:22.417 INFO  server  game_start id=7 first=alice second=bob board=10x10 time=turn60
+2026-10-18 14:04:10.902 INFO  server  game_over id=7 winner=bob loser=alice cause=timeout
+2026-10-18 14:04:11.120 WARN  azbot   slow_move login=azbot move=12 secs=11.2 sims=400
+```
+
+Date and time, level, program, then an event name and `key=value` details. Levels: `DEBUG` (every protocol line, passwords masked), `INFO` (what happened), `WARN` (unexpected but handled), `ERROR`.
+
+| Program | Name in the log | Level | Log file |
+|---|---|---|---|
+| `GameServer` | `server` | `--log-level` (default `info`) | `--log-file` (none by default) |
+| `VirusWarRandomBot` | `randbot` | `--log-level` | `--log-file` |
+| `VirusWarClient` | `client` | `debug`, shown in the window's log panel | none |
+| AZ bot | `azbot`, `aztrain`, `ladder`, `azeval` | `VIRUSWAR_LOG_LEVEL` (default `info`) | `models/play_az.log`, `train_az.log`, `ladder_az.log`, `eval_az.log` |
+| RL bot | `rlbot`, `rltrain`, `rlenv` | `VIRUSWAR_LOG_LEVEL` | `models/play_rl.log`, `train_rl.log` |
+
+Reports meant for reading rather than grepping, such as the ladder's result table (`models/ladder_az.md`), stay in Markdown. The C++ side is in `shared/logging.h`, the Python side in `viruswar/common/log.py`.
 
 ---
 
