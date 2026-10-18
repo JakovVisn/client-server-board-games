@@ -28,7 +28,8 @@ public:
     [[nodiscard]] std::string serializeForOpponent() const override;
 
     void advanceTurn() override;
-    void initFromBoard(const std::string& board);
+    // movesRemaining: 1..3, sub-moves the current player still has this turn
+    void initFromBoard(const std::string& board, int movesRemaining = kMovesPerTurn);
 
     [[nodiscard]] std::unique_ptr<AbstractGame> create(int w, int h) const override;
 

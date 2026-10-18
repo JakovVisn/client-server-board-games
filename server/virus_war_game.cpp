@@ -67,12 +67,12 @@ void VirusWarGame::advanceTurn()
     currentPlayer_ = 1 - currentPlayer_;
 }
 
-void VirusWarGame::initFromBoard(const std::string& board)
+void VirusWarGame::initFromBoard(const std::string& board, int movesRemaining)
 {
     // board is serialised from currentPlayer_'s perspective:
     //   '1' = my cell (X), '2' = opponent cell (O),
     //   '3' = my captured (CatchX), '4' = opponent captured (CatchO)
-    // Both fields are rebuilt; moveIndex_ stays 0 (start of turn).
+    // Both fields are rebuilt, and the turn position is set from movesRemaining.
     const int me  = currentPlayer_;
     const int opp = 1 - currentPlayer_;
     for (int i = 0; i < width_ * height_; ++i) {
@@ -87,6 +87,8 @@ void VirusWarGame::initFromBoard(const std::string& board)
         fields_[me ].setCell(i % width_, i / width_, myCell);
         fields_[opp].setCell(i % width_, i / width_, oppCell);
     }
+    fields_[me ].setMoveIndex(kMovesPerTurn - movesRemaining);
+    fields_[opp].setMoveIndex(0);
 }
 
 std::unique_ptr<AbstractGame> VirusWarGame::create(int w, int h) const

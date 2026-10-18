@@ -3,7 +3,6 @@
 #include <list>
 #include <map>
 #include <memory>
-#include <QHostAddress>
 #include <QMap>
 #include <QTcpServer>
 #include "abstract_game.h"
@@ -39,6 +38,7 @@ private:
     [[nodiscard]] bool stateReceiveResign(const QString& cmd, Client* client);
     [[nodiscard]] static bool stateReceivePing(const QString& cmd, Client* client);
     [[nodiscard]] static bool stateReceivePong(const QString& cmd, Client* client);
+    [[nodiscard]] static bool stateReceiveNoMatch(const QString& cmd, Client* client);
     [[nodiscard]] static bool checkProtocolVersion(const QString& version);
     [[nodiscard]] bool isAlreadyConnected(const QString& login) const;
     [[nodiscard]] std::unique_ptr<AbstractGame> makeGame(const Client* a, const Client* b) const;
@@ -46,10 +46,8 @@ private:
     [[nodiscard]] TimeControl timeControlFor(const Client* a, const Client* b) const;
     [[nodiscard]] int countActiveSessions(const Client* a, const Client* b) const;
     void matchClients();
-    void connectTwoClients(Client* client1, Client* client2);
-    void connectPlayerWithBot(Client* player, Client* bot);
-    void connectTwoBots(Client* bot1, Client* bot2);
-    void connectAutoWithBot(Client* seeker, Client* bot);
+    // Starts a game between a and b; autoBot is the league bot of a pass-3 auto-match
+    void startSession(Client* a, Client* b, Client* autoBot = nullptr);
     void disconnectClient(Client* client);
     void markClientDisconnected(Client* client) const;
 

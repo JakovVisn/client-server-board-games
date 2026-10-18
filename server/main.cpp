@@ -1,27 +1,16 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
-#include <QTime>
 #include <cstdio>
+#include "logging.h"
 #include "server.h"
 #include "server_constants.h"
 #include "time_control.h"
 
-static void messageHandler(QtMsgType type, const QMessageLogContext&, const QString& msg)
-{
-    const char* prefix = (type == QtWarningMsg)  ? "WARN  " :
-                         (type == QtCriticalMsg) ? "ERROR " : "";
-    fprintf(stderr, "%s  %s%s\n",
-            qPrintable(QTime::currentTime().toString("hh:mm:ss")),
-            prefix,
-            qPrintable(msg));
-}
-
 int main(int argc, char* argv[])
 {
-    qInstallMessageHandler(messageHandler);
-    QCoreApplication app(argc, argv);
-    app.setApplicationName("viruswar-server");
-    app.setApplicationVersion("1.0");
+    const QCoreApplication app(argc, argv);
+    QCoreApplication::setApplicationName("viruswar-server");
+    QCoreApplication::setApplicationVersion("1.0");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("VirusWar game server");
@@ -34,7 +23,16 @@ int main(int argc, char* argv[])
     parser.addOption({{"t", "time-control"},
                       "Time control when neither player asks for one: none, turnN, gameN or gameN+I (seconds)",
                       "spec", ServerConfig::DEFAULT_TIME_CONTROL});
+    parser.addOption({"log-level", "debug (adds protocol traffic), info, warn or error", "level", "info"});
+    parser.addOption({"log-file", "Also append log lines to this file", "file"});
     parser.process(app);
+
+    QtMsgType logLevel;
+    if (!Log::parseLevel(parser.value("log-level"), &logLevel)) {
+        fprintf(stderr, "Invalid --log-level: %s\n", qPrintable(parser.value("log-level")));
+        return 1;
+    }
+    Log::install("server", logLevel, parser.value("log-file"));
 
     const auto timeControl = TimeControl::parse(parser.value("time-control"));
     if (!timeControl) {
@@ -52,5 +50,5 @@ int main(int argc, char* argv[])
     if (!server.start(addr, port))
         return 1;
 
-    return app.exec();
+    return QCoreApplication::exec();
 }

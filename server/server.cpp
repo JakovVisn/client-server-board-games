@@ -1,8 +1,9 @@
 #include <algorithm>
-#include <set>
+#include <utility>
 #include <QRandomGenerator>
 #include <QRegularExpression>
-#include <QTcpSocket>
+#include "logging.h"
+#include "matchmaking.h"
 #include "server.h"
 #include "server_constants.h"
 #include "virus_war_game.h"
@@ -16,12 +17,13 @@ Server::Server(const QString& authFile, const QString& statsFile, QObject* paren
 bool Server::start(const QHostAddress& address, quint16 port)
 {
     if (!listen(address, port)) {
-        qCritical() << "Unable to start the server:" << errorString();
+        Log::error(QString("server_start_failed host=%1 port=%2 error=%3")
+                       .arg(address.toString()).arg(port).arg(Log::quoted(errorString())));
         return false;
     }
 
     startTimer(ServerConfig::SEARCH_INTERVAL);
-    qDebug() << "Server started on" << address.toString() << "port" << port;
+    Log::info(QString("server_start host=%1 port=%2").arg(address.toString()).arg(port));
     return true;
 }
 
@@ -29,7 +31,7 @@ void Server::incomingConnection(qintptr socketDescriptor)
 {
     auto* socket = new QTcpSocket(this);
     if (!socket->setSocketDescriptor(socketDescriptor)) {
-        qWarning() << "Failed to set socket descriptor";
+        Log::warn("connection_failed reason=socket_descriptor");
         socket->deleteLater();
         return;
     }
@@ -41,7 +43,8 @@ void Server::incomingConnection(qintptr socketDescriptor)
     connect(client, &Client::disconnected, this, &Server::onClientDisconnected);
 
     clients_.push_back(client);
-    qDebug() << "New connection";
+    Log::info(QString("connection peer=%1:%2")
+                  .arg(socket->peerAddress().toString()).arg(socket->peerPort()));
 }
 
 void Server::onClientDataReceived(Client* client, const QString& data)
@@ -51,13 +54,15 @@ void Server::onClientDataReceived(Client* client, const QString& data)
 
 void Server::parseData(const QString& cmd, Client* client)
 {
-    qDebug() << client->login() << "←" << cmd;
+    Log::debug(QString("recv login=%1 line=%2")
+                   .arg(Log::quoted(client->login()), Log::maskPassword(cmd)));
 
     if (stateAuthorize(cmd, client))     return;
     if (stateReceiveSteps(cmd, client))  return;
     if (stateReceiveResign(cmd, client)) return;
     if (stateReceivePing(cmd, client))   return;
     if (stateReceivePong(cmd, client))   return;
+    if (stateReceiveNoMatch(cmd, client)) return;
 
     client->send("wrongcmd:");
 }
@@ -73,7 +78,7 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     // TARGET: "login" or "login/N" or "login1/N1,login2/N2"
     // TIME: a time control (time_control.h); it needs the TARGET field, which may be empty
     static const QRegularExpression rx(
-        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+|any):(\d+|any)(?::([\w/,]*)(?::([\w+]+))?)?)?)?:)")
+        QString(R"(^mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d{1,4}|any):(\d{1,4}|any)(?::([\w/,]*)(?::([\w+]+))?)?)?)?:$)")
             .arg(AuthConfig::LOGIN_LENGTH_MIN)
             .arg(AuthConfig::LOGIN_LENGTH_MAX)
             .arg(AuthConfig::PASSWORD_LENGTH_MIN)
@@ -116,8 +121,9 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     }
 
     if (!checkProtocolVersion(version)) {
+        Log::info(QString("login_failed login=%1 reason=wrongver").arg(login));
         client->send("wrongver:");
-        client->disconnect();
+        client->closeConnection();
         return true;
     }
 
@@ -127,8 +133,9 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
 
     if (result == AuthManager::Result::Authorized) {
         if (isAlreadyConnected(login)) {
+            Log::info(QString("login_failed login=%1 reason=alreadyconnected").arg(login));
             client->send("alreadyconnected:");
-            client->disconnect();
+            client->closeConnection();
             return true;
         }
 
@@ -136,15 +143,17 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
             ? ServerConfig::DEFAULT_GAME_NAME : gameNameParam;
         auto it = gamePrototypes_.find(gameName);
         if (it == gamePrototypes_.end()) {
+            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
             client->send("badgame:");
-            client->disconnect();
+            client->closeConnection();
             return true;
         }
         AbstractGame* proto = it->second.get();
 
         if (anyWidth != anyHeight) {
+            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
             client->send("badgame:");
-            client->disconnect();
+            client->closeConnection();
             return true;
         }
         if (anyWidth) {
@@ -154,8 +163,9 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
             w = defW;
             h = defH;
         } else if (!proto->isValidBoardSize(w, h)) {
+            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
             client->send("badgame:");
-            client->disconnect();
+            client->closeConnection();
             return true;
         }
 
@@ -163,8 +173,9 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         if (!timeParam.isEmpty()) {
             timeControl = TimeControl::parse(timeParam);
             if (!timeControl) {
+                Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
                 client->send("badgame:");
-                client->disconnect();
+                client->closeConnection();
                 return true;
             }
         }
@@ -183,26 +194,28 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
             .arg(static_cast<int>(ServerConfig::PROTOCOL_VERSION))
             .arg(gameName)
             .arg(size));
-        qDebug() << login << (client->isBot() ? "(bot)" : "") << "authorized for"
-                 << gameName << size;
+        Log::info(QString("login login=%1 bot=%2 game=%3 size=%4 time=%5")
+                      .arg(login, client->isBot() ? "yes" : "no", gameName, size,
+                           timeControl ? timeControl->toString() : QStringLiteral("any")));
         return true;
     }
 
     if (result == AuthManager::Result::WrongPassword) {
+        Log::info(QString("login_failed login=%1 reason=wronguser").arg(login));
         client->send("wronguser:");
-        client->disconnect();
+        client->closeConnection();
         return true;
     }
 
+    Log::warn(QString("login_failed login=%1 reason=servererror").arg(login));
     client->send("servererror:");
-    client->disconnect();
-    qWarning() << "Auth error for" << login;
+    client->closeConnection();
     return true;
 }
 
 bool Server::stateReceiveSteps(const QString& cmd, Client* client)
 {
-    static const QRegularExpression rx(QStringLiteral(R"(step:(-?\d+):(-?\d+):(\d+):)"));
+    static const QRegularExpression rx(QStringLiteral(R"(^step:(-?\d{1,6}):(-?\d{1,6}):(\d{1,9}):$)"));
     const auto m = rx.match(cmd);
     if (!m.hasMatch()) return false;
 
@@ -219,7 +232,7 @@ bool Server::stateReceiveSteps(const QString& cmd, Client* client)
 
 bool Server::stateReceiveResign(const QString& cmd, Client* client)
 {
-    static const QRegularExpression rx(QStringLiteral(R"(resign:(\d+):)"));
+    static const QRegularExpression rx(QStringLiteral(R"(^resign:(\d{1,9}):$)"));
     const auto m = rx.match(cmd);
     if (!m.hasMatch()) return false;
 
@@ -241,6 +254,18 @@ bool Server::stateReceivePong(const QString& cmd, Client* client)
 {
     if (cmd != "pong:") return false;
     client->updateActivity();
+    return true;
+}
+
+bool Server::stateReceiveNoMatch(const QString& cmd, Client* client)
+{
+    // A client shutting down: no new games, the current ones are played to the end
+    if (cmd != "nomatch:" || client->status() == Client::Status::Unauthenticated) return false;
+    client->updateActivity();
+    if (client->isMatching()) {
+        client->stopMatching();
+        Log::info(QString("no_new_games login=%1").arg(Log::quoted(client->login())));
+    }
     return true;
 }
 
@@ -300,172 +325,55 @@ int Server::countActiveSessions(const Client* a, const Client* b) const
     return count;
 }
 
-void Server::connectTwoClients(Client* client1, Client* client2)
+void Server::startSession(Client* a, Client* b, Client* autoBot)
 {
-    if (QRandomGenerator::global()->bounded(2))
-        std::swap(client1, client2);
-    auto game = makeGame(client1, client2);
+    auto game = makeGame(a, b);
     if (!game) return;
+    if (QRandomGenerator::global()->bounded(2))  // who moves first
+        std::swap(a, b);
 
-    client1->setStatus(Client::Status::InGame);
-    client2->setStatus(Client::Status::InGame);
+    // Humans, and the seeker of an auto-match, play one game at a time; other bots stay
+    // Authorized and keep playing their other games
+    for (Client* p : {a, b})
+        if (!p->isBot() || (autoBot && p != autoBot))
+            p->setStatus(Client::Status::InGame);
+    if (autoBot)
+        autoBot->adjustAutoSessionCount(1);
 
-    auto session = std::make_unique<GameSession>(std::move(game), client1, client2, &authManager_,
-                                                 timeControlFor(client1, client2));
+    auto session = std::make_unique<GameSession>(std::move(game), a, b, &authManager_,
+                                                 timeControlFor(a, b));
     const int id = session->id();
-    session->setOnFinished([this] { matchClients(); });
-    session->start();
-    sessionById_[id] = session.get();
-    sessions_.push_back(std::move(session));
-
-    qDebug() << "Game started:" << client1->login() << "vs" << client2->login();
-}
-
-void Server::connectPlayerWithBot(Client* player, Client* bot)
-{
-    auto game = makeGame(player, bot);
-    if (!game) return;
-
-    Client* first  = QRandomGenerator::global()->bounded(2) ? bot : player;
-    Client* second = (first == bot) ? player : bot;
-
-    player->setStatus(Client::Status::InGame);
-    // bot stays Authorized — participates in unlimited simultaneous games
-
-    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_,
-                                                 timeControlFor(first, second));
-    const int id = session->id();
-    session->start();
-    sessionById_[id] = session.get();
-    sessions_.push_back(std::move(session));
-
-    qDebug() << "Game started:" << player->login() << "vs" << bot->login() << "(bot)";
-}
-
-void Server::connectAutoWithBot(Client* seeker, Client* bot)
-{
-    auto game = makeGame(seeker, bot);
-    if (!game) return;
-
-    Client* first  = QRandomGenerator::global()->bounded(2) ? bot : seeker;
-    Client* second = (first == bot) ? seeker : bot;
-
-    seeker->setStatus(Client::Status::InGame);
-
-    bot->adjustAutoSessionCount(1);
-
-    auto session = std::make_unique<GameSession>(std::move(game), first, second, &authManager_,
-                                                 timeControlFor(first, second));
-    const int id = session->id();
-    session->setOnFinished([this, bot] {
-        bot->adjustAutoSessionCount(-1);
+    session->setOnFinished([this, autoBot] {
+        if (autoBot)
+            autoBot->adjustAutoSessionCount(-1);
         matchClients();
     });
     session->start();
     sessionById_[id] = session.get();
     sessions_.push_back(std::move(session));
-
-    qDebug() << "Auto game started:" << seeker->login() << "vs" << bot->login();
-}
-
-void Server::connectTwoBots(Client* bot1, Client* bot2)
-{
-    if (QRandomGenerator::global()->bounded(2))
-        std::swap(bot1, bot2);
-    auto game = makeGame(bot1, bot2);
-    if (!game) return;
-
-    // both bots stay Authorized
-
-    auto session = std::make_unique<GameSession>(std::move(game), bot1, bot2, &authManager_,
-                                                 timeControlFor(bot1, bot2));
-    const int id = session->id();
-    session->setOnFinished([this] { matchClients(); });
-    session->start();
-    sessionById_[id] = session.get();
-    sessions_.push_back(std::move(session));
-
-    qDebug() << "Bot game started:" << bot1->login() << "vs" << bot2->login();
 }
 
 void Server::matchClients()
 {
     std::vector<Client*> pool;
     for (auto* c : clients_) {
-        if (c->status() == Client::Status::Authorized)
+        if (c->status() == Client::Status::Authorized && c->isMatching() && !c->inPostGameHold())
             pool.push_back(c);
     }
 
-    // Pass 1: preferred matches (with per-pair concurrency limits)
-    std::set<Client*> matched;
-    for (Client* c : pool) {
-        if (matched.count(c)) continue;
-        if (c->preferredOpponents().isEmpty()) continue;
+    std::vector<Matchmaking::Candidate> candidates;
+    candidates.reserve(pool.size());
+    for (const Client* c : pool)
+        candidates.push_back({c->login(), c->isBot(), c->autoLimit(), c->autoSessionCount(),
+                              c->preferredOpponents()});
 
-        for (auto it = c->preferredOpponents().constBegin();
-             it != c->preferredOpponents().constEnd() && !matched.count(c);
-             ++it) {
-            const QString& target = it.key();
-            const int limit = it.value();
+    const auto pairings = Matchmaking::findPairings(
+        candidates,
+        [&pool](int i, int j) { return sameGame(pool[i], pool[j]); },
+        [this, &pool](int i, int j) { return countActiveSessions(pool[i], pool[j]); });
 
-            for (Client* opponent : pool) {
-                if (opponent == c || matched.count(opponent)) continue;
-                if (opponent->login() != target) continue;
-                // If a bot requests a human who hasn't listed the bot as preferred, skip
-                if (c->isBot() && !opponent->preferredOpponents().isEmpty() &&
-                        !opponent->preferredOpponents().contains(c->login())) continue;
-                if (!sameGame(c, opponent)) continue;
-                if (countActiveSessions(c, opponent) >= limit) continue;
-
-                if (c->isBot() && opponent->isBot())
-                    connectTwoBots(c, opponent);
-                else if (opponent->isBot())
-                    connectPlayerWithBot(c, opponent);
-                else
-                    connectTwoClients(c, opponent);
-
-                matched.insert(c);
-                if (!opponent->isBot())
-                    matched.insert(opponent);
-                break;
-            }
-        }
-    }
-
-    // Pass 2: random human-vs-human for those with no preference
-    for (size_t i = 0; i < pool.size(); ++i) {
-        Client* a = pool[i];
-        if (a->status() != Client::Status::Authorized) continue;
-        if (a->isBot() || !a->preferredOpponents().isEmpty()) continue;
-
-        for (size_t j = i + 1; j < pool.size(); ++j) {
-            Client* b = pool[j];
-            if (b->status() != Client::Status::Authorized) continue;
-            if (b->isBot() || !b->preferredOpponents().isEmpty()) continue;
-            if (!sameGame(a, b)) continue;
-
-            connectTwoClients(a, b);
-            break;
-        }
-    }
-
-    // Pass 3: match clients without preferred against bots with available auto-slots
-    for (Client* seeker : pool) {
-        if (seeker->status() != Client::Status::Authorized) continue;
-        if (!seeker->preferredOpponents().isEmpty()) continue;
-        if (seeker->autoLimit() > 0) continue;
-
-        for (Client* bot : pool) {
-            if (bot == seeker) continue;
-            if (!bot->isBot() || bot->autoLimit() <= 0) continue;
-            if (bot->autoSessionCount() >= bot->autoLimit()) continue;
-            if (bot->login() == seeker->login()) continue;
-            if (!sameGame(seeker, bot)) continue;
-
-            connectAutoWithBot(seeker, bot);
-            break;
-        }
-    }
+    for (const auto& p : pairings)
+        startSession(pool[p.a], pool[p.b], p.autoMatch ? pool[p.b] : nullptr);
 }
 
 void Server::timerEvent(QTimerEvent* event)
@@ -489,6 +397,18 @@ void Server::timerEvent(QTimerEvent* event)
             continue;
         }
 
+        if (client->status() == Client::Status::Unauthenticated) {
+            if (client->millisecondsSinceConnect() >= ServerConfig::LOGIN_TIMEOUT_MS) {
+                const QTcpSocket* socket = client->socket();
+                Log::info(QString("login_timeout peer=%1:%2")
+                              .arg(socket ? socket->peerAddress().toString() : "-")
+                              .arg(socket ? socket->peerPort() : 0));
+                markClientDisconnected(client);
+            }
+            ++it;
+            continue;
+        }
+
         if (client->millisecondsSinceLastActivity() >= ServerConfig::INACTIVE_MIN_MS
                 && !client->isPingPending()) {
             client->send("ping:");
@@ -496,6 +416,7 @@ void Server::timerEvent(QTimerEvent* event)
         }
 
         if (client->millisecondsSinceLastActivity() >= ServerConfig::INACTIVE_MAX_MS) {
+            Log::info(QString("disconnect login=%1 reason=inactive").arg(Log::quoted(client->login())));
             disconnectClient(client);
         }
 
@@ -507,7 +428,7 @@ void Server::timerEvent(QTimerEvent* event)
 
 void Server::onClientDisconnected(Client* client)
 {
-    qDebug() << client->login() << "disconnected";
+    Log::info(QString("disconnect login=%1 reason=closed").arg(Log::quoted(client->login())));
     disconnectClient(client);
 }
 
@@ -515,14 +436,15 @@ void Server::disconnectClient(Client* client)
 {
     if (client->isBot()) {
         markClientDisconnected(client);
-        QList<int> toRemove;
-        for (auto it = sessionById_.constBegin(); it != sessionById_.constEnd(); ++it) {
-            if (it.value()->involvesPlayer(client)) {
-                it.value()->handleDisconnect(client);
-                toRemove.append(it.key());
-            }
-        }
-        for (int id : toRemove) sessionById_.remove(id);
+        // Collect first: finishing a game re-runs matchmaking, which adds to sessionById_.
+        // The finished sessions stay until timerEvent, so a late step: or resign: from the
+        // opponent is ignored, not answered with wrongcmd:
+        QList<GameSession*> games;
+        for (GameSession* session : std::as_const(sessionById_))
+            if (session->involvesPlayer(client))
+                games.append(session);
+        for (GameSession* game : games)
+            game->handleDisconnect(client);
     } else {
         GameSession* session = client->session();
         markClientDisconnected(client);
@@ -536,7 +458,7 @@ void Server::markClientDisconnected(Client* client) const
     if (!client) return;
     client->setStatus(Client::Status::Disconnected);
     client->setSession(nullptr);
-    QObject::disconnect(client, nullptr, this, nullptr);
+    disconnect(client, nullptr, this, nullptr);
     if (QTcpSocket* socket = client->socket())
         socket->disconnectFromHost();
 }

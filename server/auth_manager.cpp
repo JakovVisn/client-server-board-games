@@ -1,8 +1,9 @@
 #include <utility>
-#include <QDebug>
 #include <QFile>
+#include <QSaveFile>
 #include <QTextStream>
 #include "auth_manager.h"
+#include "logging.h"
 
 AuthManager::AuthManager(QString authFilePath, QString statsFilePath)
     : filePath_(std::move(authFilePath))
@@ -10,12 +11,12 @@ AuthManager::AuthManager(QString authFilePath, QString statsFilePath)
 {
 }
 
-AuthManager::Result AuthManager::verify(const QString& login, const QString& password)
+AuthManager::Result AuthManager::verify(const QString& login, const QString& password) const
 {
     QFile file(filePath_);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         if (QFile::exists(filePath_)) {
-            qWarning() << "Cannot open auth file:" << filePath_;
+            Log::warn(QString("auth_file_error op=read path=%1").arg(Log::quoted(filePath_)));
             return Result::Error;
         }
         return Result::NotFound;
@@ -42,7 +43,7 @@ AuthManager::Result AuthManager::registerUser(const QString& login, const QStrin
 {
     QFile file(filePath_);
     if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        qWarning() << "Cannot open auth file for writing:" << filePath_;
+        Log::warn(QString("auth_file_error op=append path=%1").arg(Log::quoted(filePath_)));
         return Result::Error;
     }
 
@@ -61,7 +62,7 @@ void AuthManager::recordLoss(const QString& login) const
     updateStats(login, 0, 1);
 }
 
-bool AuthManager::isBot(const QString& login)
+bool AuthManager::isBot(const QString& login) const
 {
     QFile file(filePath_);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -77,7 +78,7 @@ bool AuthManager::isBot(const QString& login)
     return false;
 }
 
-int AuthManager::autoConnectionLimit(const QString& login)
+int AuthManager::autoConnectionLimit(const QString& login) const
 {
     QFile file(filePath_);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -124,11 +125,15 @@ void AuthManager::updateStats(const QString& login, int winDelta, int lossDelta)
     if (!found)
         lines << QString("%1:%2:%3").arg(login).arg(winDelta).arg(lossDelta);
 
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        QTextStream out(&file);
+    // Written to a temporary file and renamed: a crash mid-write keeps the old stats
+    QSaveFile out(statsFilePath_);
+    if (out.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream stream(&out);
         for (const QString& l : lines)
-            out << l << "\n";
-    } else {
-        qWarning() << "Cannot write stats file:" << statsFilePath_;
+            stream << l << "\n";
+        stream.flush();
+        if (out.commit())
+            return;
     }
+    Log::warn(QString("stats_file_error op=write path=%1").arg(Log::quoted(statsFilePath_)));
 }

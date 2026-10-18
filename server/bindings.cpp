@@ -12,8 +12,13 @@ PYBIND11_MODULE(viruswar_sim, m) {
         .value("TurnComplete", AbstractGame::TurnResult::TurnComplete)
         .value("GameOver",     AbstractGame::TurnResult::GameOver);
 
+    // Bad arguments raise ValueError instead of reading out of bounds in C++
     py::class_<VirusWarGame>(m, "VirusWarGame")
-        .def(py::init<int, int>(),
+        .def(py::init([](int w, int h) {
+                 if (!VirusWarGame().isValidBoardSize(w, h))
+                     throw py::value_error("invalid board size");
+                 return VirusWarGame(w, h);
+             }),
              py::arg("width") = VirusWarGame::kDefaultWidth,
              py::arg("height") = VirusWarGame::kDefaultHeight)
         .def("copy",               [](const VirusWarGame& g) { return VirusWarGame(g); })
@@ -27,7 +32,13 @@ PYBIND11_MODULE(viruswar_sim, m) {
         .def("serialize_opponent", &VirusWarGame::serializeForOpponent)
         .def("width",              &VirusWarGame::boardWidth)
         .def("height",             &VirusWarGame::boardHeight)
-        .def("init_from_board", &VirusWarGame::initFromBoard, py::arg("board"))
+        .def("init_from_board", [](VirusWarGame& g, const std::string& board, int movesRemaining) {
+                 if (static_cast<int>(board.size()) != g.boardWidth() * g.boardHeight())
+                     throw py::value_error("board length must be width * height");
+                 if (movesRemaining < 1 || movesRemaining > 3)
+                     throw py::value_error("moves_remaining must be 1..3");
+                 g.initFromBoard(board, movesRemaining);
+             }, py::arg("board"), py::arg("moves_remaining") = 3)
         .def("valid_moves", [](const VirusWarGame& g) {
             std::vector<std::pair<int,int>> moves;
             for (int y = 0; y < g.boardHeight(); ++y)
@@ -40,6 +51,8 @@ PYBIND11_MODULE(viruswar_sim, m) {
     // Free function: compute action mask from a serialized board string.
     // Drop-in replacement for game_logic.valid_action_mask(board, w, h).
     m.def("valid_action_mask", [](const std::string& board, int w, int h) {
+        if (w <= 0 || h <= 0 || static_cast<int>(board.size()) != w * h)
+            throw py::value_error("board length must be w * h, with w and h positive");
         VirusWarField field(w, h);
         for (int i = 0; i < static_cast<int>(board.size()); ++i) {
             VirusWarField::Cell c;

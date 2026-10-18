@@ -1,6 +1,6 @@
 #include "game_session.h"
 #include <limits>
-#include <QDebug>
+#include "logging.h"
 #include "auth_manager.h"
 #include "client.h"
 
@@ -30,6 +30,10 @@ void GameSession::start()
 {
     if (!players_[0]->isBot()) players_[0]->setSession(this);
     if (!players_[1]->isBot()) players_[1]->setSession(this);
+    Log::info(QString("game_start id=%1 first=%2 second=%3 board=%4x%5 time=%6")
+                  .arg(id_).arg(players_[0]->login(), players_[1]->login())
+                  .arg(game_->boardWidth()).arg(game_->boardHeight())
+                  .arg(timeControl_.toString()));
     sendFound(players_[0], players_[1], "first");
     sendFound(players_[1], players_[0], "second");
     startTurn();
@@ -48,7 +52,7 @@ bool GameSession::handleMove(Client* sender, int x, int y)
     }
 
     if (!game_->isValidMove(x, y)) {
-        sendWrongstep(sender);
+        sendWrongStep(sender);
         sendGo(sender);
         return true;
     }
@@ -151,16 +155,19 @@ void GameSession::onTimeout()
         armDeadline();
         return;
     }
-    qDebug() << "Game" << id_ << ":" << currentPlayer()->login() << "ran out of time"
-             << "(" << timeControl_.toString() << ")";
     endTurn(false);
     finishGame(waitingPlayer(), currentPlayer(), GameOverCause::Timeout);
 }
 
 void GameSession::finishGame(Client* winner, Client* loser, GameOverCause cause)
 {
-    if (isFinished_) return;
+    // Every caller checks isFinished_ first; set right away so nothing re-enters
+    // while the results are sent
+    Q_ASSERT(!isFinished_);
+    isFinished_ = true;
     deadline_.stop();
+    Log::info(QString("game_over id=%1 winner=%2 loser=%3 cause=%4")
+                  .arg(id_).arg(winner->login(), loser->login(), causeName(cause)));
     if (authManager_) {
         authManager_->recordWin(winner->login());
         authManager_->recordLoss(loser->login());
@@ -182,11 +189,11 @@ void GameSession::finishGame(Client* winner, Client* loser, GameOverCause cause)
         if (p->status() != Client::Status::Disconnected)
             p->setStatus(Client::Status::Authorized);
         p->setSession(nullptr);  // no-op for bots (was never set)
+        p->startPostGameHold();  // humans only
     };
     cleanup(winner);
     cleanup(loser);
 
-    isFinished_ = true;
     if (onFinished_) onFinished_();
 }
 
@@ -226,21 +233,25 @@ void GameSession::sendField2(Client* player, const QString& type, int x, int y) 
     player->send(QString("field2:%1:%2:%3:%4:").arg(type).arg(x).arg(y).arg(id_));
 }
 
-void GameSession::sendWrongstep(Client* player) const
+void GameSession::sendWrongStep(Client* player) const
 {
     player->send(QString("wrongstep:%1:").arg(id_));
 }
 
+QString GameSession::causeName(GameOverCause cause)
+{
+    switch (cause) {
+    case GameOverCause::Rules:      return QStringLiteral("rules");
+    case GameOverCause::Timeout:    return QStringLiteral("timeout");
+    case GameOverCause::Resign:     return QStringLiteral("resign");
+    case GameOverCause::Disconnect: return QStringLiteral("disconnect");
+    }
+    return {};
+}
+
 void GameSession::sendResult(Client* player, bool won, GameOverCause cause) const
 {
-    const char* causeText = "";
-    switch (cause) {
-    case GameOverCause::Rules:      causeText = "rules";      break;
-    case GameOverCause::Timeout:    causeText = "timeout";    break;
-    case GameOverCause::Resign:     causeText = "resign";     break;
-    case GameOverCause::Disconnect: causeText = "disconnect"; break;
-    }
-    player->send(QString("%1:%2:%3:").arg(won ? "win" : "lose").arg(id_).arg(causeText));
+    player->send(QString("%1:%2:%3:").arg(won ? "win" : "lose").arg(id_).arg(causeName(cause)));
 }
 
 void GameSession::sendAbort(Client* player) const

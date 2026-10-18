@@ -3,7 +3,6 @@
 #include <functional>
 #include <memory>
 #include <QElapsedTimer>
-#include <QString>
 #include <QTimer>
 #include "abstract_game.h"
 #include "time_control.h"
@@ -70,7 +69,8 @@ private:
     void sendGo(Client* player) const;
     void sendField1(Client* player, const QString& type, int x, int y) const;
     void sendField2(Client* player, const QString& type, int x, int y) const;
-    void sendWrongstep(Client* player) const;
+    void sendWrongStep(Client* player) const;
+    [[nodiscard]] static QString causeName(GameOverCause cause);  // the CAUSE field of win: / lose:
     void sendResult(Client* player, bool won, GameOverCause cause) const;
     void sendAbort(Client* player) const;
 };

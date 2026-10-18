@@ -1,10 +1,13 @@
-#include <QDebug>
 #include "client.h"
+#include "logging.h"
+#include "server_constants.h"
 
 Client::Client(QTcpSocket* socket, QObject* parent)
     : QObject(parent)
     , socket_(socket)
 {
+    socket_->setParent(this);  // deleted with the Client
+    connectedAt_.start();
     connect(socket_, &QTcpSocket::readyRead,    this, &Client::onReadyRead);
     connect(socket_, &QTcpSocket::disconnected, this, &Client::onDisconnected);
 }
@@ -14,14 +17,30 @@ QTcpSocket* Client::socket() const { return socket_; }
 void Client::send(const QString& cmd)
 {
     if (socket_->state() != QAbstractSocket::ConnectedState) return;
-    qDebug() << login_ << "→" << cmd;
+    Log::debug(QString("send login=%1 line=%2").arg(Log::quoted(login_), cmd));
     socket_->write((cmd + '\n').toUtf8());
 }
 
-void Client::disconnect()
+void Client::closeConnection()
 {
+    closing_ = true;
     socket_->disconnectFromHost();
 }
+
+void Client::startPostGameHold()
+{
+    if (!isBot_) postGameHold_.start();
+}
+
+bool Client::inPostGameHold() const
+{
+    return postGameHold_.isValid() && postGameHold_.elapsed() < ServerConfig::POST_GAME_HOLD_MS;
+}
+
+void Client::stopMatching() { matching_ = false; }
+bool Client::isMatching() const { return matching_; }
+
+qint64 Client::millisecondsSinceConnect() const { return connectedAt_.elapsed(); }
 
 Client::Status Client::status() const { return status_; }
 void Client::setStatus(Status status) { status_ = status; }
@@ -56,7 +75,7 @@ void Client::setAnyBoardSize(bool any) { anyBoardSize_ = any; }
 std::optional<TimeControl> Client::timeControl() const { return timeControl_; }
 void Client::setTimeControl(const std::optional<TimeControl>& tc) { timeControl_ = tc; }
 
-QMap<QString, int> Client::preferredOpponents() const { return preferredOpponents_; }
+const QMap<QString, int>& Client::preferredOpponents() const { return preferredOpponents_; }
 void Client::setPreferredOpponents(const QMap<QString, int>& prefs) { preferredOpponents_ = prefs; }
 
 bool Client::isBot() const { return isBot_; }
@@ -72,10 +91,16 @@ void Client::markPingSent() { pingPending_ = true; }
 
 void Client::onReadyRead()
 {
-    while (socket_->canReadLine()) {
+    while (!closing_ && socket_->canReadLine()) {
         const QString line = QString::fromUtf8(socket_->readLine()).trimmed();
         if (!line.isEmpty())
             emit dataReceived(line);
+    }
+    if (!closing_ && socket_->bytesAvailable() > ServerConfig::MAX_LINE_BYTES) {
+        Log::warn(QString("line_too_long login=%1 bytes=%2")
+                      .arg(Log::quoted(login_)).arg(socket_->bytesAvailable()));
+        closeConnection();
+        socket_->abort();  // nothing useful left to flush
     }
 }
 

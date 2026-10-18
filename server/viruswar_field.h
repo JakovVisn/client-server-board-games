@@ -20,6 +20,7 @@ public:
     [[nodiscard]] int width() const;
     [[nodiscard]] int height() const;
     [[nodiscard]] int moveIndex() const;
+    void setMoveIndex(int index);  // sub-moves already made this turn
 
     [[nodiscard]] Cell cell(int x, int y) const;
     void setCell(int x, int y, Cell value);

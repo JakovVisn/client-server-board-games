@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QMap>
 #include <QObject>
 #include <QString>
@@ -26,7 +27,8 @@ public:
 
     [[nodiscard]] QTcpSocket* socket() const;
     void send(const QString& cmd);
-    void disconnect();
+    // Flushes and closes the connection; lines still buffered from the peer are dropped
+    void closeConnection();
 
     [[nodiscard]] Status status() const;
     void setStatus(Status status);
@@ -52,7 +54,7 @@ public:
     [[nodiscard]] std::optional<TimeControl> timeControl() const;
     void setTimeControl(const std::optional<TimeControl>& tc);
 
-    [[nodiscard]] QMap<QString, int> preferredOpponents() const;
+    [[nodiscard]] const QMap<QString, int>& preferredOpponents() const;
     void setPreferredOpponents(const QMap<QString, int>& prefs);
 
     [[nodiscard]] bool isBot() const;
@@ -62,6 +64,14 @@ public:
     void setAutoLimit(int limit);
     [[nodiscard]] int autoSessionCount() const;
     void adjustAutoSessionCount(int delta);
+
+    // After a game: humans are kept out of matchmaking for POST_GAME_HOLD_MS
+    void startPostGameHold();
+    [[nodiscard]] bool inPostGameHold() const;
+    // nomatch: the client finishes its games but is never matched again
+    void stopMatching();
+    [[nodiscard]] bool isMatching() const;
+    [[nodiscard]] qint64 millisecondsSinceConnect() const;
 
     void updateActivity();
     [[nodiscard]] qint64 millisecondsSinceLastActivity() const;
@@ -78,7 +88,7 @@ private slots:
     void onDisconnected();
 
 private:
-    QTcpSocket* socket_;
+    QTcpSocket* socket_ = nullptr;
     QString login_;
     Status status_ = Status::Unauthenticated;
     QString gameName_;
@@ -92,5 +102,9 @@ private:
     int autoSessionCount_ = 0;
     QDateTime lastActivity_ = QDateTime::currentDateTime();
     bool pingPending_ = false;
+    bool matching_ = true;
+    bool closing_ = false;
+    QElapsedTimer connectedAt_;
+    QElapsedTimer postGameHold_;
     GameSession* session_ = nullptr;
 };

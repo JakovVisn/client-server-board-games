@@ -8,6 +8,7 @@ VirusWarField::VirusWarField(int width, int height)
 int VirusWarField::width() const { return width_; }
 int VirusWarField::height() const { return height_; }
 int VirusWarField::moveIndex() const { return moveIndex_; }
+void VirusWarField::setMoveIndex(int index) { moveIndex_ = index; }
 
 int VirusWarField::cellIndex(int x, int y) const
 {
