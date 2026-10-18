@@ -50,6 +50,9 @@ void Client::setGameName(const QString& name) { gameName_ = name; }
 void Client::setBoardWidth(int w) { boardWidth_ = w; }
 void Client::setBoardHeight(int h) { boardHeight_ = h; }
 
+bool Client::anyBoardSize() const { return anyBoardSize_; }
+void Client::setAnyBoardSize(bool any) { anyBoardSize_ = any; }
+
 std::optional<TimeControl> Client::timeControl() const { return timeControl_; }
 void Client::setTimeControl(const std::optional<TimeControl>& tc) { timeControl_ = tc; }
 

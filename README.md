@@ -47,7 +47,7 @@ This builds:
 cd build/server && ./GameServer
 ```
 
-**Play against a bot.** Start the random bot and tell it to look for you: `./VirusWarRandomBot --login randombot --password <any> --preferred <your login>`. For a strong opponent, run the AZ bot's `play.py`: see [viruswar/az-bot/README.md](viruswar/az-bot/README.md).
+**Play against a bot.** Bots accept any time control; the random bot also plays any board size, the AZ bot only 10×10. Start the random bot and tell it to look for you: `./VirusWarRandomBot --login randombot --password <any> --preferred <your login>`. For a strong opponent, run the AZ bot's `play.py`: see [viruswar/az-bot/README.md](viruswar/az-bot/README.md).
 
 **Python bots.** Both bots use one venv and the built `viruswar_sim` module:
 

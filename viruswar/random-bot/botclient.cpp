@@ -48,10 +48,11 @@ void BotClient::send(const QString& cmd)
 void BotClient::onConnected()
 {
     qDebug() << login_ << "connected";
-    if (preferred_.isEmpty())
-        send(QString("mbclient:2:%1:%2:").arg(login_, password_));
-    else
-        send(QString("mbclient:2:%1:%2:viruswar:10:10:%3:").arg(login_, password_, preferred_));
+    // any:any — random moves work on every board, so play whatever size the opponent chose
+    QString msg = QString("mbclient:2:%1:%2:viruswar:any:any:").arg(login_, password_);
+    if (!preferred_.isEmpty())
+        msg += preferred_ + ':';
+    send(msg);
 }
 
 void BotClient::onDisconnected()
@@ -131,7 +132,7 @@ void BotClient::parseLine(const QString& line)
         return;
     }
 
-    static const QRegularExpression rxMbserver(R"(mbserver:\d+:\w+:\d+:\d+:)");
+    static const QRegularExpression rxMbserver(R"(mbserver:\d+:\w+:\w+:\w+:)");  // W:H may be any:any
     m = rxMbserver.match(line);
     if (m.hasMatch()) { qDebug() << login_ << "authenticated"; return; }
 

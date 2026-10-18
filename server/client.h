@@ -44,6 +44,10 @@ public:
     void setBoardWidth(int w);
     void setBoardHeight(int h);
 
+    // Asked for W:H = any:any — plays whatever size the opponent chose (board size is 0x0)
+    [[nodiscard]] bool anyBoardSize() const;
+    void setAnyBoardSize(bool any);
+
     // The time control asked for in mbclient:, or none (accepts any)
     [[nodiscard]] std::optional<TimeControl> timeControl() const;
     void setTimeControl(const std::optional<TimeControl>& tc);
@@ -80,6 +84,7 @@ private:
     QString gameName_;
     int boardWidth_ = 0;
     int boardHeight_ = 0;
+    bool anyBoardSize_ = false;
     std::optional<TimeControl> timeControl_;
     QMap<QString, int> preferredOpponents_;
     bool isBot_ = false;

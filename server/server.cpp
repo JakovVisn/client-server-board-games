@@ -68,10 +68,11 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
 
     // Groups: 1=VERSION 2=LOGIN 3=PASSWORD 4=GAMENAME(opt) 5=WIDTH(opt) 6=HEIGHT(opt)
     //         7=TARGET(opt, may be empty) 8=TIME(opt)
+    // WIDTH:HEIGHT: a size, 0:0 for the game's default, or any:any for whatever size the opponent wants
     // TARGET: "login" or "login/N" or "login1/N1,login2/N2"
     // TIME: a time control (time_control.h); it needs the TARGET field, which may be empty
     static const QRegularExpression rx(
-        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+):(\d+)(?::([\w/,]*)(?::([\w+]+))?)?)?)?:)")
+        QString(R"(mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d+|any):(\d+|any)(?::([\w/,]*)(?::([\w+]+))?)?)?)?:)")
             .arg(AuthConfig::LOGIN_LENGTH_MIN)
             .arg(AuthConfig::LOGIN_LENGTH_MAX)
             .arg(AuthConfig::PASSWORD_LENGTH_MIN)
@@ -86,7 +87,9 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     const QString login    = match.captured(2);
     const QString password = match.captured(3);
     const QString gameNameParam = match.captured(4);
-    int w = match.captured(5).toInt();
+    const bool anyWidth  = match.captured(5) == "any";
+    const bool anyHeight = match.captured(6) == "any";
+    int w = match.captured(5).toInt();  // 0 for "any"
     int h = match.captured(6).toInt();
     const QString target   = match.captured(7);
     const QString timeParam = match.captured(8);
@@ -138,7 +141,14 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         }
         AbstractGame* proto = it->second.get();
 
-        if (w == 0 && h == 0) {
+        if (anyWidth != anyHeight) {
+            client->send("badgame:");
+            client->disconnect();
+            return true;
+        }
+        if (anyWidth) {
+            w = h = 0;  // decided per game by the opponent's size
+        } else if (w == 0 && h == 0) {
             auto [defW, defH] = proto->defaultBoardSize();
             w = defW;
             h = defH;
@@ -164,15 +174,16 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         client->setGameName(gameName);
         client->setBoardWidth(w);
         client->setBoardHeight(h);
+        client->setAnyBoardSize(anyWidth);
         client->setTimeControl(timeControl);
         client->setStatus(Client::Status::Authorized);
-        client->send(QString("mbserver:%1:%2:%3:%4:")
+        const QString size = anyWidth ? QStringLiteral("any:any") : QString("%1:%2").arg(w).arg(h);
+        client->send(QString("mbserver:%1:%2:%3:")
             .arg(static_cast<int>(ServerConfig::PROTOCOL_VERSION))
             .arg(gameName)
-            .arg(w)
-            .arg(h));
+            .arg(size));
         qDebug() << login << (client->isBot() ? "(bot)" : "") << "authorized for"
-                 << gameName << w << "x" << h;
+                 << gameName << size;
         return true;
     }
 
@@ -235,11 +246,17 @@ bool Server::isAlreadyConnected(const QString& login) const
     });
 }
 
-std::unique_ptr<AbstractGame> Server::makeGame(const QString& name, int w, int h) const
+std::unique_ptr<AbstractGame> Server::makeGame(const Client* a, const Client* b) const
 {
-    auto it = gamePrototypes_.find(name);
+    auto it = gamePrototypes_.find(a->gameName());
     if (it == gamePrototypes_.end()) return nullptr;
-    return it->second->create(w, h);
+    // The size of whoever chose one; the default when both accept any
+    const Client* sized = !a->anyBoardSize() ? a : !b->anyBoardSize() ? b : nullptr;
+    if (!sized) {
+        auto [w, h] = it->second->defaultBoardSize();
+        return it->second->create(w, h);
+    }
+    return it->second->create(sized->boardWidth(), sized->boardHeight());
 }
 
 bool Server::sameGame(const Client* a, const Client* b)
@@ -247,10 +264,10 @@ bool Server::sameGame(const Client* a, const Client* b)
     // A client that asked for no time control accepts any
     const bool timeOk = !a->timeControl() || !b->timeControl()
         || *a->timeControl() == *b->timeControl();
-    return a->gameName() == b->gameName()
-        && a->boardWidth() == b->boardWidth()
-        && a->boardHeight() == b->boardHeight()
-        && timeOk;
+    // Likewise for a client that asked for any board size
+    const bool sizeOk = a->anyBoardSize() || b->anyBoardSize()
+        || (a->boardWidth() == b->boardWidth() && a->boardHeight() == b->boardHeight());
+    return a->gameName() == b->gameName() && sizeOk && timeOk;
 }
 
 TimeControl Server::timeControlFor(const Client* a, const Client* b) const
@@ -273,7 +290,7 @@ void Server::connectTwoClients(Client* client1, Client* client2)
 {
     if (QRandomGenerator::global()->bounded(2))
         std::swap(client1, client2);
-    auto game = makeGame(client1->gameName(), client1->boardWidth(), client1->boardHeight());
+    auto game = makeGame(client1, client2);
     if (!game) return;
 
     client1->setStatus(Client::Status::InGame);
@@ -292,7 +309,7 @@ void Server::connectTwoClients(Client* client1, Client* client2)
 
 void Server::connectPlayerWithBot(Client* player, Client* bot)
 {
-    auto game = makeGame(player->gameName(), player->boardWidth(), player->boardHeight());
+    auto game = makeGame(player, bot);
     if (!game) return;
 
     Client* first  = QRandomGenerator::global()->bounded(2) ? bot : player;
@@ -313,7 +330,7 @@ void Server::connectPlayerWithBot(Client* player, Client* bot)
 
 void Server::connectAutoWithBot(Client* seeker, Client* bot)
 {
-    auto game = makeGame(seeker->gameName(), seeker->boardWidth(), seeker->boardHeight());
+    auto game = makeGame(seeker, bot);
     if (!game) return;
 
     Client* first  = QRandomGenerator::global()->bounded(2) ? bot : seeker;
@@ -341,7 +358,7 @@ void Server::connectTwoBots(Client* bot1, Client* bot2)
 {
     if (QRandomGenerator::global()->bounded(2))
         std::swap(bot1, bot2);
-    auto game = makeGame(bot1->gameName(), bot1->boardWidth(), bot1->boardHeight());
+    auto game = makeGame(bot1, bot2);
     if (!game) return;
 
     // both bots stay Authorized

@@ -37,8 +37,8 @@ ConnectDialog::ConnectDialog(QWidget* parent)
     sizeRow->addWidget(new QLabel("×"));
     sizeRow->addWidget(heightSpin_);
     sizeRow->addStretch();
-    const QString sizeTip = "You are only matched with players who chose the same size. "
-                            "The bots play 10×10.";
+    const QString sizeTip = "You are matched with players who chose the same size. "
+                            "The random bot plays any size; the AZ bot only 10×10.";
     widthSpin_->setToolTip(sizeTip);
     heightSpin_->setToolTip(sizeTip);
 

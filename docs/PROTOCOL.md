@@ -43,13 +43,13 @@ The server runs any game that implements `AbstractGame` (`server/abstract_game.h
 - `VERSION` must be `2`.
 - `LOGIN` and `PASSWORD` are 3–20 characters from `[A-Za-z0-9_]`.
 - `GAME` is a registered game name; the default is `viruswar`.
-- `W:H` must be a size the game accepts; `0:0` means the game's default size.
+- `W:H` must be a size the game accepts; `0:0` means the game's default size. `any:any` accepts every size: the client is matched with players of any size and plays at theirs, or at the default size when both accept any. The random bot logs in this way.
 
 ### Server → client
 
 | Message | Meaning |
 |---|---|
-| `mbserver:VERSION:GAME:W:H:` | Login accepted, with the game and board size you will be matched for |
+| `mbserver:VERSION:GAME:W:H:` | Login accepted, with the game and board size you will be matched for (`any:any` if you accepted any) |
 | `found:GAMEID:OPPONENT:GAME:W:H:ROLE:TIME:` | A game started. `ROLE` is `first` or `second`; `first` moves first. `TIME` is the game's [time control](#time-control) |
 | `go:BOARD:MOVES:GAMEID:` | Your move. `BOARD` is the game's board string from your point of view; `MOVES` is the number of sub-moves left in this turn |
 | `go:BOARD:MOVES:GAMEID:MYTIME:OPPTIME:` | The same in a game with a time limit: your time left and your opponent's, in milliseconds |
@@ -198,7 +198,7 @@ Every pass considers only logged-in clients that are not in a game. Bot accounts
 2. **Random human vs human**, for humans without preferences.
 3. **Seekers vs league bots.** Clients without preferences and without an auto limit are matched against bot accounts that have free auto slots (`autoLimit`).
 
-Players are only matched when their game name and board size are identical and their time controls are compatible (see [Time control](#time-control)). Who moves first is chosen at random.
+Players are only matched when their game name is the same, their board sizes are the same (or one of them accepts any), and their time controls are compatible (see [Time control](#time-control)). Who moves first is chosen at random.
 
 ## Accounts: `auth.txt`
 
