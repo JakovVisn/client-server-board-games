@@ -73,17 +73,27 @@ bool GameSession::handleMove(Client* sender, int x, int y)
 
     case AbstractGame::TurnResult::GameOver:
         endTurn(false);
-        finishGame(currentPlayer(), waitingPlayer());
+        finishGame(currentPlayer(), waitingPlayer(), GameOverCause::Rules);
         break;
     }
 
     return true;
 }
 
+bool GameSession::handleResign(Client* sender)
+{
+    if (isFinished_ || !involvesPlayer(sender))
+        return false;
+    endTurn(false);
+    finishGame(opponentOf(sender), sender, GameOverCause::Resign);
+    return true;
+}
+
 void GameSession::handleDisconnect(Client* disconnected)
 {
     if (isFinished_) return;
-    finishGameDisconnect(opponentOf(disconnected), disconnected);
+    endTurn(false);
+    finishGame(opponentOf(disconnected), disconnected, GameOverCause::Disconnect);
 }
 
 bool GameSession::isFinished() const { return isFinished_; }
@@ -144,49 +154,34 @@ void GameSession::onTimeout()
     qDebug() << "Game" << id_ << ":" << currentPlayer()->login() << "ran out of time"
              << "(" << timeControl_.toString() << ")";
     endTurn(false);
-    finishGame(waitingPlayer(), currentPlayer());
+    finishGame(waitingPlayer(), currentPlayer(), GameOverCause::Timeout);
 }
 
-void GameSession::finishGame(Client* winner, Client* loser)
+void GameSession::finishGame(Client* winner, Client* loser, GameOverCause cause)
 {
+    if (isFinished_) return;
     deadline_.stop();
     if (authManager_) {
         authManager_->recordWin(winner->login());
         authManager_->recordLoss(loser->login());
     }
 
-    sendWin(winner);
-    sendLose(loser);
+    // A bot whose opponent disconnected gets abort: instead of a result, so the
+    // game is not counted as a real win in its own bookkeeping (training)
+    auto notify = [this, cause](Client* p, bool won) {
+        if (p->status() == Client::Status::Disconnected) return;
+        if (cause == GameOverCause::Disconnect && p->isBot())
+            sendAbort(p);
+        else
+            sendResult(p, won, cause);
+    };
+    notify(winner, true);
+    notify(loser, false);
 
     auto cleanup = [](Client* p) {
         if (p->status() != Client::Status::Disconnected)
             p->setStatus(Client::Status::Authorized);
         p->setSession(nullptr);  // no-op for bots (was never set)
-    };
-    cleanup(winner);
-    cleanup(loser);
-
-    isFinished_ = true;
-    if (onFinished_) onFinished_();
-}
-
-void GameSession::finishGameDisconnect(Client* winner, Client* loser)
-{
-    deadline_.stop();
-    if (authManager_) {
-        authManager_->recordWin(winner->login());
-        authManager_->recordLoss(loser->login());
-    }
-
-    // Bots get abort (no reward), humans get win/lose as usual
-    winner->isBot() ? sendAbort(winner) : sendWin(winner);
-    if (loser->status() != Client::Status::Disconnected)
-        loser->isBot() ? sendAbort(loser) : sendLose(loser);
-
-    auto cleanup = [](Client* p) {
-        if (p->status() != Client::Status::Disconnected)
-            p->setStatus(Client::Status::Authorized);
-        p->setSession(nullptr);
     };
     cleanup(winner);
     cleanup(loser);
@@ -236,14 +231,16 @@ void GameSession::sendWrongstep(Client* player) const
     player->send(QString("wrongstep:%1:").arg(id_));
 }
 
-void GameSession::sendWin(Client* player) const
+void GameSession::sendResult(Client* player, bool won, GameOverCause cause) const
 {
-    player->send(QString("win:%1:").arg(id_));
-}
-
-void GameSession::sendLose(Client* player) const
-{
-    player->send(QString("lose:%1:").arg(id_));
+    const char* causeText = "";
+    switch (cause) {
+    case GameOverCause::Rules:      causeText = "rules";      break;
+    case GameOverCause::Timeout:    causeText = "timeout";    break;
+    case GameOverCause::Resign:     causeText = "resign";     break;
+    case GameOverCause::Disconnect: causeText = "disconnect"; break;
+    }
+    player->send(QString("%1:%2:%3:").arg(won ? "win" : "lose").arg(id_).arg(causeText));
 }
 
 void GameSession::sendAbort(Client* player) const

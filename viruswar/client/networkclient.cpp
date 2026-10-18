@@ -37,6 +37,12 @@ void NetworkClient::sendMove(int x, int y)
     send(QString("step:%1:%2:%3:").arg(x).arg(y).arg(gameId_));
 }
 
+void NetworkClient::resign()
+{
+    send(QString("resign:%1:").arg(gameId_));
+    socket_->flush();  // the caller may disconnect right away
+}
+
 bool NetworkClient::isConnected() const
 {
     return socket_->state() == QAbstractSocket::ConnectedState;
@@ -93,13 +99,10 @@ void NetworkClient::parseLine(const QString& line)
 
     if (line == "wrongcmd:") { emit errorOccurred("wrongcmd:"); return; }
 
-    static const QRegularExpression rxWin(R"(win:(\d+):)");
-    auto m = rxWin.match(line);
-    if (m.hasMatch()) { emit gameOver(true); return; }
-
-    static const QRegularExpression rxLose(R"(lose:(\d+):)");
-    m = rxLose.match(line);
-    if (m.hasMatch()) { emit gameOver(false); return; }
+    // win:GAMEID:[CAUSE:] / lose:GAMEID:[CAUSE:]
+    static const QRegularExpression rxResult(R"(^(win|lose):(\d+):(?:(\w+):)?)");
+    auto m = rxResult.match(line);
+    if (m.hasMatch()) { emit gameOver(m.captured(1) == "win", m.captured(3)); return; }
 
     static const QRegularExpression rxWrongstep(R"(wrongstep:(\d+):)");
     m = rxWrongstep.match(line);
@@ -112,11 +115,12 @@ void NetworkClient::parseLine(const QString& line)
         return;
     }
 
-    // found:GAMEID:OPPONENT:GAMENAME:W:H:role:[TIME:]  (GAMEID ignored — humans get it from go:)
+    // found:GAMEID:OPPONENT:GAMENAME:W:H:role:[TIME:]
     static const QRegularExpression rxFound(
         R"(found:(\d+):(\w+):\w+:(\d+):(\d+):(first|second):(?:([\w+]+):)?)");
     m = rxFound.match(line);
     if (m.hasMatch()) {
+        gameId_ = m.captured(1).toInt();  // needed before the first go: to resign while waiting
         emit matchFound(m.captured(2), m.captured(5) == "first",
                         m.captured(3).toInt(), m.captured(4).toInt(), m.captured(6));
         return;

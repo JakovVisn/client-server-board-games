@@ -16,6 +16,7 @@ public:
                          const QString& timeControl);
     void disconnectFromServer();
     void sendMove(int x, int y);
+    void resign();  // give up the current game; the server answers lose:GAMEID:resign:
 
     [[nodiscard]] bool isConnected() const;
 
@@ -31,7 +32,8 @@ signals:
     void moveConfirmed(const QString& type, int x, int y);
     void opponentMoved(const QString& type, int x, int y);
     void wrongStep();
-    void gameOver(bool won);
+    // cause: rules, timeout, resign or disconnect; empty from an older server
+    void gameOver(bool won, const QString& cause);
     void errorOccurred(const QString& message);
 
 private slots:

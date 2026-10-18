@@ -11,6 +11,14 @@
 class AuthManager;
 class Client;
 
+// Why a game ended; sent as the CAUSE field of win: / lose:
+enum class GameOverCause {
+    Rules,       // the game's rules ended it (Virus War: the opponent can't make a full turn)
+    Timeout,     // the loser ran out of time
+    Resign,      // the loser sent resign:
+    Disconnect,  // the loser's connection was lost or timed out
+};
+
 class GameSession
 {
 public:
@@ -23,6 +31,7 @@ public:
 
     void start();
     bool handleMove(Client* sender, int x, int y);
+    bool handleResign(Client* sender);
     void handleDisconnect(Client* disconnected);
 
     [[nodiscard]] int id() const;
@@ -55,15 +64,13 @@ private:
     [[nodiscard]] qint64 timeLeftMs() const;
     void onTimeout();
 
-    void finishGame(Client* winner, Client* loser);
-    void finishGameDisconnect(Client* winner, Client* loser);
+    void finishGame(Client* winner, Client* loser, GameOverCause cause);
 
     void sendFound(Client* receiver, Client* opponent, const QString& role) const;
     void sendGo(Client* player) const;
     void sendField1(Client* player, const QString& type, int x, int y) const;
     void sendField2(Client* player, const QString& type, int x, int y) const;
     void sendWrongstep(Client* player) const;
-    void sendWin(Client* player) const;
-    void sendLose(Client* player) const;
+    void sendResult(Client* player, bool won, GameOverCause cause) const;
     void sendAbort(Client* player) const;
 };

@@ -71,6 +71,9 @@ private:
     void setupNetwork();
     void setAppState(AppState state);
     void updateStatus();
+    [[nodiscard]] bool inGame() const;
+    [[nodiscard]] bool confirmLeavingGame();
+    void showGameOver(bool won, const QString& cause);
     void startClocks(const QString& timeControl, bool goFirst);
     void switchClock(Clock clock);
     void updateClock();

@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QCloseEvent>
 #include <QFontDatabase>
+#include <QHash>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -87,6 +88,14 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    if (inGame()) {
+        if (!confirmLeavingGame()) {
+            event->ignore();
+            return;
+        }
+        if (inGame())  // the game may have ended while the question was open
+            network_->resign();
+    }
     qInstallMessageHandler(nullptr);
     s_logPanel_ = nullptr;
     network_->disconnectFromServer();
@@ -199,19 +208,7 @@ void MainWindow::setupNetwork()
         stateLabel_->setText("Invalid move — try again");
     });
 
-    connect(network_, &NetworkClient::gameOver, this, [this](bool won) {
-        // Disconnecting resets the board; keep the final moves visible until OK
-        keepFinalBoard_ = true;
-        switchClock(Clock::Stopped);
-        boardWidget_->setInteractive(false);
-        network_->disconnectFromServer();
-        QMessageBox::information(this, "Game over", won ? "You win!" : "You lose.");
-        keepFinalBoard_ = false;
-        gameState_.reset(boardWidth_, boardHeight_);
-        boardWidget_->update();
-        myMs_ = opponentMs_ = -1;
-        updateClock();
-    });
+    connect(network_, &NetworkClient::gameOver, this, &MainWindow::showGameOver);
 
     connect(network_, &NetworkClient::errorOccurred, this, [this](const QString& msg) {
         const QString text = [&] {
@@ -270,7 +267,62 @@ void MainWindow::onConnectClicked()
 
 void MainWindow::onDisconnectClicked()
 {
+    if (inGame()) {
+        // Resign instead of just dropping the connection: the server answers
+        // lose:...:resign:, and showGameOver() reports it and disconnects
+        if (confirmLeavingGame() && inGame())  // it may have ended while the question was open
+            network_->resign();
+        return;
+    }
     network_->disconnectFromServer();
+}
+
+// ── Game over ────────────────────────────────────────────────────────────────
+
+bool MainWindow::inGame() const
+{
+    return appState_ == AppState::WaitingForTurn || appState_ == AppState::YourTurn;
+}
+
+bool MainWindow::confirmLeavingGame()
+{
+    return QMessageBox::question(this, "Leave the game?",
+                                 "Leaving now counts as a loss.",
+                                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+           == QMessageBox::Yes;
+}
+
+void MainWindow::showGameOver(bool won, const QString& cause)
+{
+    // The one place that explains a result; cause is the server's CAUSE field
+    static const QHash<QString, QString> winReasons = {
+        {"rules",      "Your opponent can't make 3 moves."},
+        {"timeout",    "Your opponent ran out of time."},
+        {"resign",     "Your opponent resigned."},
+        {"disconnect", "Your opponent left the game."},
+    };
+    static const QHash<QString, QString> loseReasons = {
+        {"rules",   "You can't make 3 moves."},
+        {"timeout", "You ran out of time."},
+        {"resign",  "You resigned."},
+    };
+
+    // Disconnecting resets the board; keep the final moves visible until OK
+    keepFinalBoard_ = true;
+    switchClock(Clock::Stopped);
+    boardWidget_->setInteractive(false);
+    network_->disconnectFromServer();
+
+    QMessageBox box(QMessageBox::Information, "Game over", won ? "You win!" : "You lose.",
+                    QMessageBox::Ok, this);
+    box.setInformativeText((won ? winReasons : loseReasons).value(cause));
+    box.exec();
+
+    keepFinalBoard_ = false;
+    gameState_.reset(boardWidth_, boardHeight_);
+    boardWidget_->update();
+    myMs_ = opponentMs_ = -1;
+    updateClock();
 }
 
 // ── State & status ───────────────────────────────────────────────────────────

@@ -90,6 +90,7 @@ Build `viruswar_sim` with the same Python version as the venv, or it won't impor
 - [x] Bot accounts - dedicated bot role with multi-game support
 - [x] Protocol versioning
 - [x] Time controls like in chess: per turn, per game, with increment; running out of time loses
+- [x] Resignation, and every result says why the game ended
 
 ### Client
 - [x] Connect dialog with persistent settings
@@ -100,6 +101,7 @@ Build `viruswar_sim` with the same Python version as the venv, or it won't impor
 - [ ] Hand-drawn art style for board and pieces
 - [x] Board size and time control chosen per session
 - [x] Clocks for both players
+- [x] Leaving a game asks for confirmation; the result dialog says why the game ended
 
 ### Random bot
 - [x] Play random valid moves against any opponent

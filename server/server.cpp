@@ -55,6 +55,7 @@ void Server::parseData(const QString& cmd, Client* client)
 
     if (stateAuthorize(cmd, client))     return;
     if (stateReceiveSteps(cmd, client))  return;
+    if (stateReceiveResign(cmd, client)) return;
     if (stateReceivePing(cmd, client))   return;
     if (stateReceivePong(cmd, client))   return;
 
@@ -213,6 +214,19 @@ bool Server::stateReceiveSteps(const QString& cmd, Client* client)
     auto it = sessionById_.find(sessionId);
     if (it == sessionById_.end()) { client->send("wrongcmd:"); return true; }
     it.value()->handleMove(client, x, y);
+    return true;
+}
+
+bool Server::stateReceiveResign(const QString& cmd, Client* client)
+{
+    static const QRegularExpression rx(QStringLiteral(R"(resign:(\d+):)"));
+    const auto m = rx.match(cmd);
+    if (!m.hasMatch()) return false;
+
+    client->updateActivity();
+    auto it = sessionById_.find(m.captured(1).toInt());
+    if (it == sessionById_.end()) { client->send("wrongcmd:"); return true; }
+    it.value()->handleResign(client);  // ignored for a game the client is not in
     return true;
 }
 

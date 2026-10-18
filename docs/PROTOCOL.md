@@ -37,6 +37,7 @@ The server runs any game that implements `AbstractGame` (`server/abstract_game.h
 | `mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H:TARGET:` | first line | Same, and ask for specific opponents (see [Matchmaking](#matchmaking)) |
 | `mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H:TARGET:TIME:` | first line | Same, and ask for a [time control](#time-control); `TARGET` may be empty: `…:10:10::game300+5:` |
 | `step:X:Y:GAMEID:` | after `go:` for that game | One sub-move on cell `(X, Y)` |
+| `resign:GAMEID:` | any time during that game | Give up the game: you lose with cause `resign` |
 | `pong:` | after `ping:` | Keep-alive answer |
 | `ping:` | any time | Server answers `pong:` |
 
@@ -56,8 +57,8 @@ The server runs any game that implements `AbstractGame` (`server/abstract_game.h
 | `field2:TYPE:X:Y:GAMEID:` | Your own sub-move was applied; `TYPE` is the game's move result |
 | `field1:TYPE:X:Y:GAMEID:` | Your opponent made a sub-move, same fields |
 | `wrongstep:GAMEID:` | Your sub-move was illegal; the same `go:` follows |
-| `win:GAMEID:` / `lose:GAMEID:` | Game over |
-| `abort:GAMEID:` | Bots only: the game ended because a player disconnected |
+| `win:GAMEID:CAUSE:` / `lose:GAMEID:CAUSE:` | Game over, with the [cause](#how-a-game-ends) |
+| `abort:GAMEID:` | Bots only, instead of `win:`: the opponent disconnected |
 | `ping:` | Keep-alive; answer `pong:` |
 | `pong:` | Answer to your `ping:` |
 
@@ -75,10 +76,10 @@ Errors during play (the connection stays open):
 
 | Message | Cause |
 |---|---|
-| `wrongcmd:` | Unrecognised line, a second `mbclient:`, or `step:` with a game id the server does not know |
+| `wrongcmd:` | Unrecognised line, a second `mbclient:`, or `step:` / `resign:` with a game id the server does not know |
 | `wrongstep:GAMEID:` | Illegal sub-move; followed by `go:` again |
 
-A `step:` sent when it is not your turn, or for a game that has just ended, is silently ignored. Finished games are forgotten within 200 ms; after that, their id gets `wrongcmd:`.
+A `step:` sent when it is not your turn, or a `step:` / `resign:` for a game that has just ended or that you are not playing, is silently ignored. Finished games are forgotten within 200 ms; after that, their id gets `wrongcmd:`.
 
 ## Session lifecycle
 
@@ -97,8 +98,8 @@ stateDiagram-v2
         YourTurn --> YourTurn: step → wrongstep, go
         YourTurn --> Waiting: step → field2
     }
-    InGame --> Authorized: win / lose, also on time out<br/>(back in the matchmaking pool)
-    InGame --> Disconnected: connection lost or 300 s inactive (opponent wins)
+    InGame --> Authorized: win / lose: rules, timeout, resign<br/>(back in the matchmaking pool)
+    InGame --> Disconnected: connection lost or 300 s inactive<br/>(opponent wins: disconnect)
     Authorized --> Disconnected: connection lost or 300 s inactive
     Disconnected --> [*]
 ```
@@ -110,9 +111,22 @@ stateDiagram-v2
    - the turn is over: the opponent gets `go:` for their turn;
    - the game is over: the winner gets `win:` and the loser gets `lose:`.
 
-   A player who runs out of time loses the same way, with `win:` / `lose:` (see [Time control](#time-control)).
+   A game can also end by timeout, resignation or disconnect; see [How a game ends](#how-a-game-ends).
 4. **After the game** both clients stay logged in and **return to the matchmaking pool**, so a new game may start without a new login. The Qt client disconnects after each game; bots stay connected.
-5. **Disconnect mid-game.** The remaining player wins and the stats record a win and a loss. A human gets `win:`; a bot gets `abort:` instead.
+5. **Leaving mid-game.** Send `resign:` first: you get `lose:…:resign:` and your opponent `win:…:resign:`. If the connection just drops, the opponent wins with cause `disconnect`. The Qt client asks for confirmation and resigns.
+
+### How a game ends
+
+Every ending goes through one path on the server and sends the same pair of messages, `win:GAMEID:CAUSE:` to the winner and `lose:GAMEID:CAUSE:` to the loser. The stats record a win and a loss in every case.
+
+| `CAUSE` | The loser… |
+|---|---|
+| `rules` | lost by the game's rules (Virus War: can't make a full turn) |
+| `timeout` | ran out of time ([Time control](#time-control)) |
+| `resign` | sent `resign:` |
+| `disconnect` | lost the connection or was inactive for 300 s; only the winner is told |
+
+On `disconnect`, a bot winner gets `abort:GAMEID:` instead of `win:`. `CAUSE` is appended at the end, so a client that ignores it keeps working.
 
 ### Several games at once
 
@@ -154,8 +168,8 @@ alice S: go:<alice's board>:2:7:54120:60000:
 
 **… turns alternate until the game ends …**
 ```
-bob   S: win:7:
-alice S: lose:7:
+bob   S: win:7:rules:
+alice S: lose:7:rules:
 ```
 
 **Keep-alive.** It can arrive at any moment, in or out of a game:
@@ -186,7 +200,7 @@ For example `turn60`, `game300`, `game300+5`. Limits: `turn` 1–3600 s, `game` 
 - **Choosing.** A client may ask for one in `mbclient:` (`TIME`). It is matched only with clients that asked for the same time control or for none. A client that asks for none accepts any: the game uses the other player's choice, or the server default when neither chose. The default is `turn60`; the server's `--time-control` option changes it.
 - **The clock** of the player to move runs from the moment the server sends the `go:` that starts their turn. It keeps running between sub-moves and through `wrongstep:`. With `gameN+I` the increment is added when the player completes the turn.
 - **Time left** is reported in every `go:` as `MYTIME:OPPTIME:` in milliseconds. For `turnN`, `OPPTIME` is the full limit the opponent will get. A game with `none` sends `go:` without these fields.
-- **Running out of time** loses the game: the winner gets `win:` and the player who ran out gets `lose:`, bots included. The stats record it like any other result.
+- **Running out of time** loses the game with cause `timeout`: `win:GAMEID:timeout:` and `lose:GAMEID:timeout:`, bots included.
 
 The extra fields are appended at the end of `found:` and `go:`, so a client that ignores them keeps working.
 
