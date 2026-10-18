@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpressionValidator>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -25,6 +26,15 @@ ConnectDialog::ConnectDialog(QWidget* parent)
     passwordEdit_->setEchoMode(QLineEdit::Password);
     prefEdit_     = new QLineEdit;
     prefEdit_->setPlaceholderText("optional");
+
+    // The protocol separates fields with ':'; logins and passwords are 3–20 of [A-Za-z0-9_]
+    const auto* nameValidator = new QRegularExpressionValidator(QRegularExpression(R"(\w{0,20})"), this);
+    loginEdit_->setValidator(nameValidator);
+    passwordEdit_->setValidator(nameValidator);
+    loginEdit_->setPlaceholderText("3–20 letters, digits or _");
+    prefEdit_->setValidator(new QRegularExpressionValidator(QRegularExpression(R"([\w/,]*)"), this));
+    rememberCheck_ = new QCheckBox("Remember password");
+    rememberCheck_->setToolTip("Stored unencrypted in the application settings");
 
     widthSpin_  = new QSpinBox;
     heightSpin_ = new QSpinBox;
@@ -63,6 +73,7 @@ ConnectDialog::ConnectDialog(QWidget* parent)
     form_->addRow("Port:",     portEdit_);
     form_->addRow("Login:",    loginEdit_);
     form_->addRow("Password:", passwordEdit_);
+    form_->addRow(QString(), rememberCheck_);
     form_->addRow("Opponent:", prefEdit_);
     form_->addRow("Board:",    sizeRow);
     form_->addRow(customTimeCheck_);
@@ -74,7 +85,11 @@ ConnectDialog::ConnectDialog(QWidget* parent)
     });
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttons->button(QDialogButtonBox::Ok)->setText("Connect");
+    connectButton_ = buttons->button(QDialogButtonBox::Ok);
+    connectButton_->setText("Connect");
+    for (QLineEdit* edit : {hostEdit_, portEdit_, loginEdit_, passwordEdit_})
+        connect(edit, &QLineEdit::textChanged, this, &ConnectDialog::updateConnectButton);
+    updateConnectButton();
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -90,6 +105,16 @@ QString ConnectDialog::password() const { return passwordEdit_->text(); }
 QString ConnectDialog::preferredOpponent() const { return prefEdit_->text().trimmed(); }
 int ConnectDialog::boardWidth() const   { return widthSpin_->value(); }
 int ConnectDialog::boardHeight() const  { return heightSpin_->value(); }
+bool ConnectDialog::rememberPassword() const { return rememberCheck_->isChecked(); }
+void ConnectDialog::setRememberPassword(bool remember) { rememberCheck_->setChecked(remember); }
+
+void ConnectDialog::updateConnectButton()
+{
+    const bool ok = !host().isEmpty() && port() > 0
+                    && login().size() >= 3 && password().size() >= 3;
+    connectButton_->setEnabled(ok);
+}
+
 QString ConnectDialog::timeControl() const
 {
     return customTimeCheck_->isChecked() ? timeCombo_->currentData().toString() : QString();

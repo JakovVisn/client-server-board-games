@@ -1,6 +1,6 @@
 #include "networkclient.h"
-#include <QDebug>
-#include <QRegularExpression>
+#include "logging.h"
+#include "protocol.h"
 
 NetworkClient::NetworkClient(QObject* parent)
     : QObject(parent), socket_(new QTcpSocket(this))
@@ -22,13 +22,23 @@ void NetworkClient::connectToServer(const QString& host, quint16 port,
     boardWidth_ = boardWidth;
     boardHeight_ = boardHeight;
     timeControl_ = timeControl;
-    qDebug() << "Connecting to" << host << "port" << port;
+    gameId_ = -1;
+    Log::info(QString("connecting host=%1 port=%2 login=%3").arg(host).arg(port).arg(login));
     socket_->connectToHost(host, port);
 }
 
 void NetworkClient::disconnectFromServer()
 {
     if (socket_->state() != QAbstractSocket::UnconnectedState)
+        socket_->abort();
+}
+
+void NetworkClient::disconnectGracefully(int waitMs)
+{
+    if (socket_->state() == QAbstractSocket::UnconnectedState)
+        return;
+    socket_->disconnectFromHost();
+    if (socket_->state() != QAbstractSocket::UnconnectedState && !socket_->waitForDisconnected(waitMs))
         socket_->abort();
 }
 
@@ -39,8 +49,8 @@ void NetworkClient::sendMove(int x, int y)
 
 void NetworkClient::resign()
 {
-    send(QString("resign:%1:").arg(gameId_));
-    socket_->flush();  // the caller may disconnect right away
+    if (gameId_ >= 0)
+        send(QString("resign:%1:").arg(gameId_));
 }
 
 bool NetworkClient::isConnected() const
@@ -51,28 +61,22 @@ bool NetworkClient::isConnected() const
 void NetworkClient::send(const QString& cmd)
 {
     if (socket_->state() != QAbstractSocket::ConnectedState) return;
-    qDebug() << "→" << cmd;
+    Log::debug(QString("send line=%1").arg(Log::maskPassword(cmd)));
     socket_->write((cmd + '\n').toUtf8());
 }
 
 void NetworkClient::onConnected()
 {
-    qDebug() << "Connected";
+    Log::info("connected");
     emit connected();
-    // mbclient:VERSION:LOGIN:PASSWORD:GAME:W:H[:TARGET[:TIME]]: — TIME needs the TARGET field,
-    // which may be empty
-    QString msg = QString("mbclient:2:%1:%2:viruswar:%3:%4:")
-        .arg(login_, password_).arg(boardWidth_).arg(boardHeight_);
-    if (!timeControl_.isEmpty())
-        msg += preferredOpponent_ + ':' + timeControl_ + ':';
-    else if (!preferredOpponent_.isEmpty())
-        msg += preferredOpponent_ + ':';
-    send(msg);
+    send(Protocol::loginLine(login_, password_, boardWidth_, boardHeight_,
+                             preferredOpponent_, timeControl_));
 }
 
 void NetworkClient::onDisconnected()
 {
-    qDebug() << "Disconnected";
+    Log::info("disconnected");
+    gameId_ = -1;
     emit disconnected();
 }
 
@@ -81,84 +85,73 @@ void NetworkClient::onReadyRead()
     while (socket_->canReadLine()) {
         const QString line = QString::fromUtf8(socket_->readLine()).trimmed();
         if (line.isEmpty()) continue;
-        qDebug() << "←" << line;
-        parseLine(line);
+        Log::debug(QString("recv line=%1").arg(line));
+        handleLine(line);
     }
 }
 
 void NetworkClient::onSocketError(QAbstractSocket::SocketError error)
 {
-    if (error == QAbstractSocket::RemoteHostClosedError) return;
-    qDebug() << "Socket error:" << socket_->errorString();
-    emit errorOccurred(socket_->errorString());
+    if (error == QAbstractSocket::RemoteHostClosedError) return;  // reported as disconnected()
+    Log::warn(QString("socket_error error=%1").arg(Log::quoted(socket_->errorString())));
+    emit connectionError(socket_->errorString());
 }
 
-void NetworkClient::parseLine(const QString& line)
+void NetworkClient::handleLine(const QString& line)
 {
-    if (line == "ping:") { send("pong:"); return; }
+    using Type = Protocol::ServerMessage::Type;
+    const Protocol::ServerMessage msg = Protocol::parse(line);
 
-    if (line == "wrongcmd:") { emit errorOccurred("wrongcmd:"); return; }
-
-    // win:GAMEID:[CAUSE:] / lose:GAMEID:[CAUSE:]
-    static const QRegularExpression rxResult(R"(^(win|lose):(\d+):(?:(\w+):)?)");
-    auto m = rxResult.match(line);
-    if (m.hasMatch()) { emit gameOver(m.captured(1) == "win", m.captured(3)); return; }
-
-    static const QRegularExpression rxWrongstep(R"(wrongstep:(\d+):)");
-    m = rxWrongstep.match(line);
-    if (m.hasMatch()) { emit wrongStep(); return; }
-
-    static const QRegularExpression rxMbserver(R"(mbserver:\d+:(\w+):(\d+):(\d+):)");
-    m = rxMbserver.match(line);
-    if (m.hasMatch()) {
-        emit authSuccess(m.captured(1), m.captured(2).toInt(), m.captured(3).toInt());
+    // In-game messages for any other game are stale (e.g. the game just ended)
+    const bool inGameMessage = msg.type == Type::Go || msg.type == Type::OwnMove ||
+                               msg.type == Type::OpponentMove || msg.type == Type::WrongStep ||
+                               msg.type == Type::Result;
+    if (inGameMessage && msg.gameId != gameId_) {
+        Log::debug(QString("ignored line=%1 reason=other_game current=%2").arg(line).arg(gameId_));
         return;
     }
 
-    // found:GAMEID:OPPONENT:GAMENAME:W:H:role:[TIME:]
-    static const QRegularExpression rxFound(
-        R"(found:(\d+):(\w+):\w+:(\d+):(\d+):(first|second):(?:([\w+]+):)?)");
-    m = rxFound.match(line);
-    if (m.hasMatch()) {
-        gameId_ = m.captured(1).toInt();  // needed before the first go: to resign while waiting
-        emit matchFound(m.captured(2), m.captured(5) == "first",
-                        m.captured(3).toInt(), m.captured(4).toInt(), m.captured(6));
-        return;
+    switch (msg.type) {
+    case Type::Ping:
+        send("pong:");
+        break;
+    case Type::CommandError:
+        emit commandRejected();
+        break;
+    case Type::LoginError:
+        emit loginFailed(msg.text);
+        break;
+    case Type::LoginOk:
+        emit loggedIn(msg.width, msg.height);
+        break;
+    case Type::Found:
+        gameId_ = msg.gameId;
+        gameWidth_ = msg.width;
+        gameHeight_ = msg.height;
+        emit matchFound(msg.text, msg.first, msg.width, msg.height, msg.timeControl);
+        break;
+    case Type::Go:
+        if (msg.board.size() != gameWidth_ * gameHeight_) {
+            Log::warn(QString("bad_board length=%1 expected=%2")
+                          .arg(msg.board.size()).arg(gameWidth_ * gameHeight_));
+            break;
+        }
+        emit yourTurn(msg.board, msg.movesRemaining, msg.myMs, msg.opponentMs);
+        break;
+    case Type::OwnMove:
+        emit moveConfirmed(msg.text, msg.x, msg.y);
+        break;
+    case Type::OpponentMove:
+        emit opponentMoved(msg.text, msg.x, msg.y);
+        break;
+    case Type::WrongStep:
+        emit wrongStep();
+        break;
+    case Type::Result:
+        emit gameOver(msg.won, msg.text);
+        break;
+    case Type::Unknown:
+        Log::warn(QString("unhandled_message line=%1").arg(line));
+        break;
     }
-
-    // go:BOARD:MOVES:GAMEID:[MYMS:OPPONENTMS:]
-    static const QRegularExpression rxGo(R"(go:([0-4]+):(\d+):(\d+):(?:(\d+):(\d+):)?)");
-    m = rxGo.match(line);
-    if (m.hasMatch()) {
-        gameId_ = m.captured(3).toInt();
-        const bool timed = m.hasCaptured(4);
-        emit yourTurn(m.captured(1), m.captured(2).toInt(),
-                      timed ? m.captured(4).toLongLong() : -1,
-                      timed ? m.captured(5).toLongLong() : -1);
-        return;
-    }
-
-    // field2:TYPE:X:Y:GAMEID:
-    static const QRegularExpression rxField2(R"(field2:(\w+):(-?\d+):(-?\d+):(\d+):)");
-    m = rxField2.match(line);
-    if (m.hasMatch()) {
-        emit moveConfirmed(m.captured(1), m.captured(2).toInt(), m.captured(3).toInt());
-        return;
-    }
-
-    // field1:TYPE:X:Y:GAMEID:
-    static const QRegularExpression rxField1(R"(field1:(\w+):(-?\d+):(-?\d+):(\d+):)");
-    m = rxField1.match(line);
-    if (m.hasMatch()) {
-        emit opponentMoved(m.captured(1), m.captured(2).toInt(), m.captured(3).toInt());
-        return;
-    }
-
-    if (line == "wrongver:" || line == "wronguser:" ||
-        line == "alreadyconnected:" || line == "badgame:" || line == "servererror:") {
-        emit errorOccurred(line);
-        return;
-    }
-
-    qDebug() << "Unhandled:" << line;
 }

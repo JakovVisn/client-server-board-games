@@ -1,35 +1,56 @@
 #include "mainwindow.h"
 #include "connectdialog.h"
+#include "logging.h"
 #include <QAction>
-#include <QCloseEvent>
-#include <QFontDatabase>
 #include <QHash>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPlainTextEdit>
-#include <QRegularExpression>
+#include <QPushButton>  // needed to compare clickedButton() with a QPushButton*
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
-#include <QTime>
 #include <QTimer>
 #include <QToolBar>
 
-QPlainTextEdit* MainWindow::s_logPanel_ = nullptr;
-
-void MainWindow::messageHandler(QtMsgType type, const QMessageLogContext&, const QString& msg)
-{
-    QString prefix;
-    switch (type) {
-    case QtWarningMsg:  prefix = "WARN  "; break;
-    case QtCriticalMsg: prefix = "ERROR "; break;
-    default: break;
-    }
-    const QString line = QTime::currentTime().toString("hh:mm:ss") + "  " + prefix + msg;
-    if (s_logPanel_)
-        s_logPanel_->appendPlainText(line);
-    fprintf(stderr, "%s\n", qPrintable(line));
+namespace {
+constexpr int kResignWaitMs = 500;  // closing the window: time to deliver resign:
 }
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+void MainWindow::ConnectionSettings::load()
+{
+    const QSettings s("VirusWar", "Client");
+    host             = s.value("host", host).toString();
+    port             = s.value("port", port).value<quint16>();
+    login            = s.value("login", login).toString();
+    password         = s.value("password", password).toString();
+    rememberPassword = s.value("rememberPassword", !password.isEmpty()).toBool();
+    preferred        = s.value("preferred", preferred).toString();
+    width            = s.value("width", width).toInt();
+    height           = s.value("height", height).toInt();
+    timeControl      = s.value("timeControl", timeControl).toString();
+}
+
+void MainWindow::ConnectionSettings::save() const
+{
+    QSettings s("VirusWar", "Client");
+    s.setValue("host", host);
+    s.setValue("port", port);
+    s.setValue("login", login);
+    if (rememberPassword)
+        s.setValue("password", password);
+    else
+        s.remove("password");
+    s.setValue("rememberPassword", rememberPassword);
+    s.setValue("preferred", preferred);
+    s.setValue("width", width);
+    s.setValue("height", height);
+    s.setValue("timeControl", timeControl);
+}
+
+// ── Construction ─────────────────────────────────────────────────────────────
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -37,18 +58,8 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("VirusWar");
     setMinimumSize(520, 560);
     resize(560, 600);
-
-    {
-        QSettings s("VirusWar", "Client");
-        lastHost_     = s.value("host",      lastHost_).toString();
-        lastPort_     = s.value("port",      lastPort_).value<quint16>();
-        lastLogin_    = s.value("login",     lastLogin_).toString();
-        lastPassword_ = s.value("password",  lastPassword_).toString();
-        lastPref_     = s.value("preferred", lastPref_).toString();
-        lastWidth_    = s.value("width",     lastWidth_).toInt();
-        lastHeight_   = s.value("height",    lastHeight_).toInt();
-        lastTimeControl_ = s.value("timeControl", lastTimeControl_).toString();
-    }
+    monotonic_.start();
+    settings_.load();
 
     gameState_.reset(boardWidth_, boardHeight_);
     boardWidget_ = new BoardWidget(this);
@@ -68,8 +79,12 @@ MainWindow::MainWindow(QWidget* parent)
     splitter->setSizes({440, 120});
     setCentralWidget(splitter);
 
-    s_logPanel_ = logPanel_;
-    qInstallMessageHandler(messageHandler);
+    // Every log line also goes to the panel; queued, because logging may happen on any thread
+    Log::setSink([panel = QPointer<QPlainTextEdit>(logPanel_)](const QString& line) {
+        QMetaObject::invokeMethod(panel, [panel, line] {
+            if (panel) panel->appendPlainText(line);
+        }, Qt::QueuedConnection);
+    });
 
     setupToolbar();
     setupStatusBar();
@@ -84,7 +99,10 @@ MainWindow::MainWindow(QWidget* parent)
     });
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    Log::setSink(nullptr);
+}
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
@@ -93,11 +111,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
             event->ignore();
             return;
         }
-        if (inGame())  // the game may have ended while the question was open
+        if (inGame()) {  // the game may have ended while the question was open
+            resultShown_ = true;  // closing: no "connection lost" dialog when the socket closes
             network_->resign();
+            network_->disconnectGracefully(kResignWaitMs);  // deliver resign: before closing
+        }
     }
-    qInstallMessageHandler(nullptr);
-    s_logPanel_ = nullptr;
     network_->disconnectFromServer();
     event->accept();
 }
@@ -131,36 +150,42 @@ void MainWindow::setupStatusBar()
     clockTimer_ = new QTimer(this);
     clockTimer_->setInterval(200);
     connect(clockTimer_, &QTimer::timeout, this, &MainWindow::updateClock);
-    clockTimer_->start();
 }
 
 void MainWindow::setupNetwork()
 {
     network_ = new NetworkClient(this);
 
-    connect(network_, &NetworkClient::connected, this, [this] {
+    connect(network_, &NetworkClient::loggedIn, this, [this](int w, int h) {
+        if (w > 0 && h > 0) {
+            boardWidth_  = w;
+            boardHeight_ = h;
+        }
         setAppState(AppState::WaitingForMatch);
     });
 
     connect(network_, &NetworkClient::disconnected, this, [this] {
-        setAppState(AppState::Disconnected);
-    });
-
-    connect(network_, &NetworkClient::authSuccess, this,
-            [this](const QString&, int w, int h) {
-        boardWidth_  = w;
-        boardHeight_ = h;
+        if (inGame())  // not after our own result: the server or the network went away
+            showGameOver(false, "connection_lost");
+        else
+            setAppState(AppState::Disconnected);
     });
 
     connect(network_, &NetworkClient::matchFound, this,
             [this](const QString& opponent, bool goFirst, int w, int h, const QString& timeControl) {
+        Log::info(QString("game_start opponent=%1 board=%2x%3 time=%4 role=%5")
+                      .arg(opponent).arg(w).arg(h)
+                      .arg(timeControl.isEmpty() ? "-" : timeControl, goFirst ? "first" : "second"));
         opponent_ = opponent;
         opponentTurnActive_ = false;
+        invalidMove_ = false;
+        resultShown_ = false;
         boardWidth_  = w;
         boardHeight_ = h;
         gameState_.reset(boardWidth_, boardHeight_);
         boardWidget_->update();
-        startClocks(timeControl, goFirst);
+        clock_.start(timeControl, goFirst, now());
+        clockTimer_->start();
         setAppState(AppState::WaitingForTurn);
     });
 
@@ -172,12 +197,8 @@ void MainWindow::setupNetwork()
         }
         gameState_.fromString(board);
         movesLeft_ = moves;
-        if (myMs >= 0) {
-            myMs_ = myMs;
-            opponentMs_ = opponentMs;
-            clockSince_.restart();
-            runningClock_ = Clock::Mine;
-        }
+        if (myMs >= 0)
+            clock_.sync(myMs, opponentMs, now());
         setAppState(AppState::YourTurn);
     });
 
@@ -187,8 +208,9 @@ void MainWindow::setupNetwork()
         gameState_.setCell(x, y, caught ? Cell::CapturedByMe : Cell::Mine);
         gameState_.setNewCell(x, y, caught ? NewCell::MyCatch : NewCell::MyMove);
         boardWidget_->update();
+        invalidMove_ = false;
         if (movesLeft_ == 1)  // that was the last sub-move of my turn
-            switchClock(Clock::Opponent);
+            clock_.myTurnDone(now());
     });
 
     connect(network_, &NetworkClient::opponentMoved, this,
@@ -204,24 +226,34 @@ void MainWindow::setupNetwork()
         updateStatus();
     });
 
-    connect(network_, &NetworkClient::wrongStep, this, [this] {
-        stateLabel_->setText("Invalid move — try again");
-    });
+    // The server sends go: again right after this; updateStatus() shows the hint
+    connect(network_, &NetworkClient::wrongStep, this, [this] { invalidMove_ = true; });
 
     connect(network_, &NetworkClient::gameOver, this, &MainWindow::showGameOver);
 
-    connect(network_, &NetworkClient::errorOccurred, this, [this](const QString& msg) {
-        const QString text = [&] {
-            if (msg == "wronguser:")        return QStringLiteral("Wrong login or password.");
-            if (msg == "alreadyconnected:") return QStringLiteral("Already connected from another session.");
-            if (msg == "badgame:")          return QStringLiteral("Unknown game, invalid board size or time control.");
-            if (msg == "wrongver:")         return QStringLiteral("Protocol version mismatch.");
-            if (msg == "servererror:")      return QStringLiteral("Server error.");
-            if (msg == "wrongcmd:")         return QStringLiteral("Server rejected the command.");
-            return msg;
-        }();
-        QMessageBox::warning(this, "Error", text);
-        setAppState(AppState::Disconnected);
+    // wrongcmd: is not fatal: the connection and the game go on
+    connect(network_, &NetworkClient::commandRejected, this, [this] {
+        statusBar()->showMessage("The server rejected a command", 3000);
+    });
+
+    connect(network_, &NetworkClient::loginFailed, this, [this](const QString& error) {
+        static const QHash<QString, QString> texts = {
+            {"wronguser:",        "Wrong login or password."},
+            {"alreadyconnected:", "Already connected from another session."},
+            {"badgame:",          "Unknown game, invalid board size or time control."},
+            {"wrongver:",         "Protocol version mismatch."},
+            {"servererror:",      "Server error."},
+        };
+        network_->disconnectFromServer();
+        showError(texts.value(error, error));
+    });
+
+    connect(network_, &NetworkClient::connectionError, this, [this](const QString& message) {
+        network_->disconnectFromServer();
+        if (inGame())
+            showGameOver(false, "connection_lost");
+        else
+            showError(message);
     });
 }
 
@@ -230,39 +262,37 @@ void MainWindow::setupNetwork()
 void MainWindow::onConnectClicked()
 {
     ConnectDialog dlg(this);
-    dlg.setHost(lastHost_);
-    dlg.setPort(lastPort_);
-    dlg.setLogin(lastLogin_);
-    dlg.setPassword(lastPassword_);
-    dlg.setPreferredOpponent(lastPref_);
-    dlg.setBoardSize(lastWidth_, lastHeight_);
-    dlg.setTimeControl(lastTimeControl_);
+    dlg.setHost(settings_.host);
+    dlg.setPort(settings_.port);
+    dlg.setLogin(settings_.login);
+    dlg.setPassword(settings_.password);
+    dlg.setRememberPassword(settings_.rememberPassword);
+    dlg.setPreferredOpponent(settings_.preferred);
+    dlg.setBoardSize(settings_.width, settings_.height);
+    dlg.setTimeControl(settings_.timeControl);
 
     if (dlg.exec() != QDialog::Accepted) return;
 
-    lastHost_     = dlg.host();
-    lastPort_     = dlg.port();
-    lastLogin_    = dlg.login();
-    lastPassword_ = dlg.password();
-    lastPref_     = dlg.preferredOpponent();
-    lastWidth_    = dlg.boardWidth();
-    lastHeight_   = dlg.boardHeight();
-    lastTimeControl_ = dlg.timeControl();
+    settings_.host             = dlg.host();
+    settings_.port             = dlg.port();
+    settings_.login            = dlg.login();
+    settings_.password         = dlg.password();
+    settings_.rememberPassword = dlg.rememberPassword();
+    settings_.preferred        = dlg.preferredOpponent();
+    settings_.width            = dlg.boardWidth();
+    settings_.height           = dlg.boardHeight();
+    settings_.timeControl      = dlg.timeControl();
+    settings_.save();
 
-    {
-        QSettings s("VirusWar", "Client");
-        s.setValue("host",      lastHost_);
-        s.setValue("port",      lastPort_);
-        s.setValue("login",     lastLogin_);
-        s.setValue("password",  lastPassword_);
-        s.setValue("preferred", lastPref_);
-        s.setValue("width",     lastWidth_);
-        s.setValue("height",    lastHeight_);
-        s.setValue("timeControl", lastTimeControl_);
-    }
+    connectWithSettings();
+}
 
-    network_->connectToServer(lastHost_, lastPort_, lastLogin_, lastPassword_, lastPref_,
-                              lastWidth_, lastHeight_, lastTimeControl_);
+void MainWindow::connectWithSettings()
+{
+    setAppState(AppState::Connecting);
+    network_->connectToServer(settings_.host, settings_.port, settings_.login, settings_.password,
+                              settings_.preferred, settings_.width, settings_.height,
+                              settings_.timeControl);
 }
 
 void MainWindow::onDisconnectClicked()
@@ -275,26 +305,30 @@ void MainWindow::onDisconnectClicked()
         return;
     }
     network_->disconnectFromServer();
+    setAppState(AppState::Disconnected);  // also cancels a connect still in progress
 }
 
 // ── Game over ────────────────────────────────────────────────────────────────
 
 bool MainWindow::inGame() const
 {
-    return appState_ == AppState::WaitingForTurn || appState_ == AppState::YourTurn;
+    return !resultShown_
+           && (appState_ == AppState::WaitingForTurn || appState_ == AppState::YourTurn);
 }
 
 bool MainWindow::confirmLeavingGame()
 {
-    return QMessageBox::question(this, "Leave the game?",
-                                 "Leaving now counts as a loss.",
-                                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
-           == QMessageBox::Yes;
+    QMessageBox box(QMessageBox::Question, "Leave the game?", "Leaving now counts as a loss.",
+                    QMessageBox::Yes | QMessageBox::No, this);
+    box.setDefaultButton(QMessageBox::No);
+    leaveQuestion_ = &box;  // closed by showGameOver() if the game ends meanwhile
+    return box.exec() == QMessageBox::Yes;
 }
 
 void MainWindow::showGameOver(bool won, const QString& cause)
 {
-    // The one place that explains a result; cause is the server's CAUSE field
+    // The one place that explains a result; cause is the server's CAUSE field,
+    // or connection_lost when the connection broke mid-game
     static const QHash<QString, QString> winReasons = {
         {"rules",      "Your opponent can't make 3 moves."},
         {"timeout",    "Your opponent ran out of time."},
@@ -302,27 +336,48 @@ void MainWindow::showGameOver(bool won, const QString& cause)
         {"disconnect", "Your opponent left the game."},
     };
     static const QHash<QString, QString> loseReasons = {
-        {"rules",   "You can't make 3 moves."},
-        {"timeout", "You ran out of time."},
-        {"resign",  "You resigned."},
+        {"rules",           "You can't make 3 moves."},
+        {"timeout",         "You ran out of time."},
+        {"resign",          "You resigned."},
+        {"connection_lost", "The connection to the server was lost; the game counts as a loss."},
     };
+    if (resultShown_) return;
+    resultShown_ = true;
 
-    // Disconnecting resets the board; keep the final moves visible until OK
+    Log::info(QString("game_over result=%1 cause=%2")
+                  .arg(won ? "win" : "lose", cause.isEmpty() ? "-" : cause));
+    if (leaveQuestion_)
+        leaveQuestion_->reject();
+
+    // Disconnecting resets the board; keep the final moves visible until the dialog closes
     keepFinalBoard_ = true;
-    switchClock(Clock::Stopped);
+    clock_.stop(now());
+    updateClock();
     boardWidget_->setInteractive(false);
     network_->disconnectFromServer();
+    setAppState(AppState::Disconnected);
 
     QMessageBox box(QMessageBox::Information, "Game over", won ? "You win!" : "You lose.",
                     QMessageBox::Ok, this);
     box.setInformativeText((won ? winReasons : loseReasons).value(cause));
+    QPushButton* playAgain = box.addButton("Play again", QMessageBox::AcceptRole);
     box.exec();
 
     keepFinalBoard_ = false;
     gameState_.reset(boardWidth_, boardHeight_);
     boardWidget_->update();
-    myMs_ = opponentMs_ = -1;
+    clock_.reset();
+    clockTimer_->stop();
     updateClock();
+
+    if (box.clickedButton() == playAgain && appState_ == AppState::Disconnected)
+        connectWithSettings();
+}
+
+void MainWindow::showError(const QString& text)
+{
+    setAppState(AppState::Disconnected);
+    QMessageBox::warning(this, "Error", text);
 }
 
 // ── State & status ───────────────────────────────────────────────────────────
@@ -333,14 +388,12 @@ void MainWindow::setAppState(AppState state)
         if (!keepFinalBoard_) {
             gameState_.reset(boardWidth_, boardHeight_);
             boardWidget_->update();
+            clock_.reset();
+            clockTimer_->stop();
+            updateClock();
         }
         opponent_.clear();
         opponentTurnActive_ = false;
-        if (!keepFinalBoard_) {
-            runningClock_ = Clock::Stopped;
-            myMs_ = opponentMs_ = -1;
-            updateClock();
-        }
     }
     appState_ = state;
     boardWidget_->setInteractive(state == AppState::YourTurn);
@@ -356,6 +409,10 @@ void MainWindow::updateStatus()
         stateLabel_->setText("Not connected");
         gameInfoLabel_->clear();
         break;
+    case AppState::Connecting:
+        stateLabel_->setText("Connecting…");
+        gameInfoLabel_->clear();
+        break;
     case AppState::WaitingForMatch:
         stateLabel_->setText("Searching for opponent…");
         gameInfoLabel_->clear();
@@ -365,7 +422,8 @@ void MainWindow::updateStatus()
         gameInfoLabel_->setText(QString("vs %1").arg(opponent_));
         break;
     case AppState::YourTurn:
-        stateLabel_->setText(QString("Your turn  ·  %1 move%2 left")
+        stateLabel_->setText(QString("%1Your turn  ·  %2 move%3 left")
+                                 .arg(invalidMove_ ? "Invalid move — try again  ·  " : "")
                                  .arg(movesLeft_)
                                  .arg(movesLeft_ == 1 ? "" : "s"));
         gameInfoLabel_->setText(QString("vs %1").arg(opponent_));
@@ -373,55 +431,16 @@ void MainWindow::updateStatus()
     }
 }
 
-// ── Clocks ───────────────────────────────────────────────────────────────────
-
-void MainWindow::startClocks(const QString& timeControl, bool goFirst)
-{
-    // turnN, gameN or gameN+I in seconds (docs/PROTOCOL.md#time-control); none or empty: no clock
-    static const QRegularExpression rx(R"(^(turn|game)(\d+)(?:\+(\d+))?$)");
-    const auto m = rx.match(timeControl);
-    if (!m.hasMatch()) {
-        runningClock_ = Clock::Stopped;
-        myMs_ = opponentMs_ = -1;
-        updateClock();
-        return;
-    }
-    turnLimit_   = m.captured(1) == "turn";
-    turnLimitMs_ = m.captured(2).toLongLong() * 1000;
-    incrementMs_ = m.captured(3).toLongLong() * 1000;
-    myMs_ = opponentMs_ = turnLimitMs_;  // the starting clock in both modes
-    clockSince_.start();
-    runningClock_ = goFirst ? Clock::Mine : Clock::Opponent;
-    updateClock();
-}
-
-void MainWindow::switchClock(Clock clock)
-{
-    if (myMs_ < 0 || runningClock_ == clock) return;
-    const qint64 spent = clockSince_.elapsed();
-    if (runningClock_ == Clock::Mine) {
-        myMs_ = turnLimit_ ? turnLimitMs_ : qMax<qint64>(0, myMs_ - spent);
-        if (clock == Clock::Opponent && !turnLimit_)
-            myMs_ += incrementMs_;  // my turn is complete
-    } else if (runningClock_ == Clock::Opponent) {
-        opponentMs_ = turnLimit_ ? turnLimitMs_ : qMax<qint64>(0, opponentMs_ - spent);
-    }
-    runningClock_ = clock;
-    clockSince_.restart();
-    updateClock();
-}
+// ── Clock display ────────────────────────────────────────────────────────────
 
 void MainWindow::updateClock()
 {
-    if (myMs_ < 0) {
+    using Side = GameClock::Side;
+    if (!clock_.active()) {
         clockLabel_->clear();
         return;
     }
-    const qint64 spent = clockSince_.isValid() ? clockSince_.elapsed() : 0;
-    const qint64 mine = runningClock_ == Clock::Mine ? qMax<qint64>(0, myMs_ - spent) : myMs_;
-    const qint64 theirs = runningClock_ == Clock::Opponent
-        ? qMax<qint64>(0, opponentMs_ - spent) : opponentMs_;
-
+    const qint64 t = now();
     auto format = [](qint64 ms, bool running) {
         const qint64 s = (ms + 999) / 1000;  // round up: 0:00 only when the time is really out
         QString text = QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
@@ -429,16 +448,18 @@ void MainWindow::updateClock()
         return running ? "<b>" + text + "</b>" : text;
     };
 
-    if (turnLimit_) {
+    const Side running = clock_.running();
+    if (clock_.turnLimit()) {
         // Only the side to move has a running limit
-        if (runningClock_ == Clock::Mine)
-            clockLabel_->setText("Your time " + format(mine, true));
-        else if (runningClock_ == Clock::Opponent)
-            clockLabel_->setText("Opponent's time " + format(theirs, true));
+        if (running == Side::Mine)
+            clockLabel_->setText("Your time " + format(clock_.remaining(Side::Mine, t), true));
+        else if (running == Side::Opponent)
+            clockLabel_->setText("Opponent's time " + format(clock_.remaining(Side::Opponent, t), true));
         else
             clockLabel_->clear();
     } else {
-        clockLabel_->setText("You " + format(mine, runningClock_ == Clock::Mine)
-                             + "  ·  Opponent " + format(theirs, runningClock_ == Clock::Opponent));
+        clockLabel_->setText("You " + format(clock_.remaining(Side::Mine, t), running == Side::Mine)
+                             + "  ·  Opponent "
+                             + format(clock_.remaining(Side::Opponent, t), running == Side::Opponent));
     }
 }

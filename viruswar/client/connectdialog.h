@@ -7,6 +7,7 @@ class QCheckBox;
 class QComboBox;
 class QFormLayout;
 class QLineEdit;
+class QPushButton;
 class QSpinBox;
 
 class ConnectDialog : public QDialog
@@ -24,6 +25,7 @@ public:
     [[nodiscard]] int boardWidth() const;
     [[nodiscard]] int boardHeight() const;
     [[nodiscard]] QString timeControl() const;  // empty: server default, any opponent
+    [[nodiscard]] bool rememberPassword() const;
 
     void setHost(const QString& host);
     void setPort(quint16 port);
@@ -32,16 +34,21 @@ public:
     void setPreferredOpponent(const QString& pref);
     void setBoardSize(int width, int height);
     void setTimeControl(const QString& timeControl);
+    void setRememberPassword(bool remember);
 
 private:
-    QLineEdit* hostEdit_;
-    QLineEdit* portEdit_;
-    QLineEdit* loginEdit_;
-    QLineEdit* passwordEdit_;
-    QLineEdit* prefEdit_;
-    QSpinBox* widthSpin_;
-    QSpinBox* heightSpin_;
-    QCheckBox* customTimeCheck_;
-    QComboBox* timeCombo_;
-    QFormLayout* form_;
+    QLineEdit* hostEdit_ = nullptr;
+    QLineEdit* portEdit_ = nullptr;
+    QLineEdit* loginEdit_ = nullptr;
+    QLineEdit* passwordEdit_ = nullptr;
+    QLineEdit* prefEdit_ = nullptr;
+    QSpinBox* widthSpin_ = nullptr;
+    QSpinBox* heightSpin_ = nullptr;
+    QCheckBox* customTimeCheck_ = nullptr;
+    QComboBox* timeCombo_ = nullptr;
+    QFormLayout* form_ = nullptr;
+    QCheckBox* rememberCheck_ = nullptr;
+    QPushButton* connectButton_ = nullptr;
+
+    void updateConnectButton();
 };

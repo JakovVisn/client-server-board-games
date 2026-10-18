@@ -12,13 +12,16 @@ qt_add_executable(VirusWarClient
     main.cpp
     boardwidget.h boardwidget.cpp
     connectdialog.h connectdialog.cpp
+    gameclock.h gameclock.cpp
     gamestate.h gamestate.cpp
     mainwindow.h mainwindow.cpp
     networkclient.h networkclient.cpp
+    protocol.h protocol.cpp
     resources.qrc
 )
 
 target_link_libraries(VirusWarClient PRIVATE
+    SharedLog
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets

@@ -2,11 +2,14 @@
 
 #include <QElapsedTimer>
 #include <QMainWindow>
+#include <QPointer>
 #include "boardwidget.h"
+#include "gameclock.h"
 #include "gamestate.h"
 #include "networkclient.h"
 
 class QLabel;
+class QMessageBox;
 class QPlainTextEdit;
 class QTimer;
 
@@ -23,64 +26,64 @@ protected:
 
 private:
     // UI
-    BoardWidget* boardWidget_;
-    QPlainTextEdit* logPanel_;
-    QLabel* stateLabel_;
-    QLabel* gameInfoLabel_;
-    QLabel* clockLabel_;
-    QTimer* clockTimer_;
-    QAction* connectAction_;
-    QAction* disconnectAction_;
+    BoardWidget* boardWidget_ = nullptr;
+    QPlainTextEdit* logPanel_ = nullptr;
+    QLabel* stateLabel_ = nullptr;
+    QLabel* gameInfoLabel_ = nullptr;
+    QLabel* clockLabel_ = nullptr;
+    QTimer* clockTimer_ = nullptr;
+    QAction* connectAction_ = nullptr;
+    QAction* disconnectAction_ = nullptr;
+    QPointer<QMessageBox> leaveQuestion_;  // open "Leave the game?" question, if any
 
     // Core
     GameState gameState_;
-    NetworkClient* network_;
+    NetworkClient* network_ = nullptr;
+    GameClock clock_;
+    QElapsedTimer monotonic_;  // time base for clock_
 
     // Session state
-    enum class AppState { Disconnected, WaitingForMatch, WaitingForTurn, YourTurn };
+    enum class AppState { Disconnected, Connecting, WaitingForMatch, WaitingForTurn, YourTurn };
     AppState appState_ = AppState::Disconnected;
     int boardWidth_  = 10;
     int boardHeight_ = 10;
     QString opponent_;
     int movesLeft_ = 0;
     bool opponentTurnActive_ = false;
+    bool invalidMove_ = false;     // last sub-move was rejected; shown until the next one
+    bool resultShown_ = false;     // the game is over; its result dialog is (being) shown
     bool keepFinalBoard_ = false;  // game over: board stays until the result dialog is closed
 
-    // Clocks, resynced from every go:; between them the running one is counted down locally
-    enum class Clock { Stopped, Mine, Opponent };
-    Clock runningClock_ = Clock::Stopped;
-    qint64 myMs_ = -1;             // -1: the game has no time control
-    qint64 opponentMs_ = -1;
-    bool turnLimit_ = false;       // turnN: a fresh limit each turn instead of a game clock
-    qint64 turnLimitMs_ = 0;
-    qint64 incrementMs_ = 0;       // gameN+I: added after each completed turn
-    QElapsedTimer clockSince_;
+    // Last connection settings
+    struct ConnectionSettings
+    {
+        QString host = "127.0.0.1";
+        quint16 port = 1234;
+        QString login;
+        QString password;
+        bool rememberPassword = false;
+        QString preferred;
+        int width  = 10;
+        int height = 10;
+        QString timeControl;
 
-    // Last connection params
-    QString lastHost_     = "127.0.0.1";
-    quint16 lastPort_     = 1234;
-    QString lastLogin_;
-    QString lastPassword_;
-    QString lastPref_;
-    int lastWidth_  = 10;
-    int lastHeight_ = 10;
-    QString lastTimeControl_;
+        void load();
+        void save() const;
+    } settings_;
 
     void setupToolbar();
     void setupStatusBar();
     void setupNetwork();
     void setAppState(AppState state);
     void updateStatus();
+    [[nodiscard]] qint64 now() const { return monotonic_.elapsed(); }
     [[nodiscard]] bool inGame() const;
     [[nodiscard]] bool confirmLeavingGame();
+    void connectWithSettings();
     void showGameOver(bool won, const QString& cause);
-    void startClocks(const QString& timeControl, bool goFirst);
-    void switchClock(Clock clock);
+    void showError(const QString& text);
     void updateClock();
 
     void onConnectClicked();
     void onDisconnectClicked();
-
-    static QPlainTextEdit* s_logPanel_;
-    static void messageHandler(QtMsgType type, const QMessageLogContext&, const QString& msg);
 };
