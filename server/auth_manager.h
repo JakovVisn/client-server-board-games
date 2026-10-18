@@ -14,6 +14,7 @@ public:
 
     explicit AuthManager(QString authFilePath, QString statsFilePath);
 
+    // A plain-text password in auth.txt is replaced by its hash on the first successful login
     [[nodiscard]] Result verify(const QString& login, const QString& password) const;
     [[nodiscard]] Result registerUser(const QString& login, const QString& password) const;
 
@@ -28,4 +29,5 @@ private:
     QString statsFilePath_;
 
     void updateStats(const QString& login, int winDelta, int lossDelta) const;
+    void storeHash(const QString& login, const QString& password) const;
 };

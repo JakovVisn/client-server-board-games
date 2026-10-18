@@ -1,9 +1,66 @@
 #include <utility>
+#include <QCryptographicHash>
 #include <QFile>
+#include <QPasswordDigestor>
+#include <QRandomGenerator>
 #include <QSaveFile>
+#include <QStringList>
 #include <QTextStream>
 #include "auth_manager.h"
 #include "logging.h"
+
+namespace {
+
+// Stored as pbkdf2_sha256$ITERATIONS$SALT$KEY (hex). The server is single-threaded, so
+// every login blocks it for one derivation: keep the iteration count modest
+constexpr auto kScheme = "pbkdf2_sha256";
+constexpr int kIterations = 10000;
+constexpr int kSaltBytes = 16;
+constexpr int kKeyBytes = 32;
+
+QByteArray derive(const QString& password, const QByteArray& salt, int iterations)
+{
+    return QPasswordDigestor::deriveKeyPbkdf2(QCryptographicHash::Sha256, password.toUtf8(),
+                                              salt, iterations, kKeyBytes);
+}
+
+QString hashPassword(const QString& password)
+{
+    QByteArray salt(kSaltBytes, Qt::Uninitialized);
+    QRandomGenerator::system()->fillRange(reinterpret_cast<quint32*>(salt.data()), kSaltBytes / 4);
+    return QStringList{QString::fromLatin1(kScheme), QString::number(kIterations),
+                       QString::fromLatin1(salt.toHex()),
+                       QString::fromLatin1(derive(password, salt, kIterations).toHex())}.join('$');
+}
+
+bool isHash(const QString& stored)
+{
+    return stored.startsWith(QString::fromLatin1(kScheme) + '$');
+}
+
+// Constant time, so a wrong guess doesn't reveal how many bytes matched
+bool sameBytes(const QByteArray& a, const QByteArray& b)
+{
+    if (a.size() != b.size()) return false;
+    unsigned char diff = 0;
+    for (qsizetype i = 0; i < a.size(); ++i)
+        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+    return diff == 0;
+}
+
+bool matches(const QString& stored, const QString& password)
+{
+    if (!isHash(stored))
+        return stored == password;  // a plain-text line, written by hand or by an older server
+    const QStringList f = stored.split('$');
+    bool ok = false;
+    const int iterations = f.size() == 4 ? f[1].toInt(&ok) : 0;
+    if (!ok || iterations <= 0) return false;
+    return sameBytes(derive(password, QByteArray::fromHex(f[2].toLatin1()), iterations),
+                     QByteArray::fromHex(f[3].toLatin1()));
+}
+
+}  // namespace
 
 AuthManager::AuthManager(QString authFilePath, QString statsFilePath)
     : filePath_(std::move(authFilePath))
@@ -30,13 +87,49 @@ AuthManager::Result AuthManager::verify(const QString& login, const QString& pas
             continue;
 
         if (parts.at(0).trimmed() == login) {
-            return (parts.at(1).trimmed() == password)
-                ? Result::Authorized
-                : Result::WrongPassword;
+            const QString stored = parts.at(1).trimmed();
+            if (!matches(stored, password))
+                return Result::WrongPassword;
+            if (!isHash(stored)) {
+                file.close();
+                storeHash(login, password);
+            }
+            return Result::Authorized;
         }
     }
 
     return Result::NotFound;
+}
+
+void AuthManager::storeHash(const QString& login, const QString& password) const
+{
+    QFile file(filePath_);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    QStringList lines;
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        QString line = in.readLine();
+        QStringList parts = line.split(':');
+        if (parts.size() >= 2 && parts.at(0).trimmed() == login) {
+            parts[1] = hashPassword(password);
+            line = parts.join(':');
+        }
+        lines << line;
+    }
+    file.close();
+
+    QSaveFile out(filePath_);
+    if (out.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream stream(&out);
+        for (const QString& l : lines)
+            stream << l << "\n";
+        stream.flush();
+        if (out.commit()) {
+            Log::info(QString("password_hashed login=%1").arg(Log::quoted(login)));
+            return;
+        }
+    }
+    Log::warn(QString("auth_file_error op=write path=%1").arg(Log::quoted(filePath_)));
 }
 
 AuthManager::Result AuthManager::registerUser(const QString& login, const QString& password) const
@@ -48,7 +141,7 @@ AuthManager::Result AuthManager::registerUser(const QString& login, const QStrin
     }
 
     QTextStream out(&file);
-    out << login << ":" << password << "\n";
+    out << login << ":" << hashPassword(password) << "\n";
     return Result::Authorized;
 }
 

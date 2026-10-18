@@ -1,6 +1,10 @@
-// Unit tests for the server's pure parts: Virus War rules, time controls, matchmaking.
+// Unit tests for the server's parts that need no sockets: Virus War rules, time controls,
+// matchmaking and account storage.
+#include <QFile>
 #include <QObject>
+#include <QTemporaryDir>
 #include <QTest>
+#include "auth_manager.h"
 #include "matchmaking.h"
 #include "time_control.h"
 #include "virus_war_game.h"
@@ -17,6 +21,12 @@ int countValidMoves(const VirusWarGame& g)
         for (int x = 0; x < g.boardWidth(); ++x)
             n += g.isValidMove(x, y);
     return n;
+}
+
+QString readFile(const QString& path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly | QIODevice::Text) ? QString::fromUtf8(file.readAll()) : QString();
 }
 
 void playTurn(VirusWarGame& g, std::initializer_list<std::pair<int, int>> moves)
@@ -272,6 +282,46 @@ private slots:
         QCOMPARE(p[1].a, 2);
         QVERIFY(p[1].autoMatch);
     }
+
+    // ── Accounts ──────────────────────────────────────────────────────────
+
+    void newAccountsAreStoredHashed()
+    {
+        QTemporaryDir dir;
+        AuthManager auth(dir.filePath("auth.txt"), dir.filePath("stats.txt"));
+        QCOMPARE(auth.verify("alice", "secret"), AuthManager::Result::NotFound);
+        QCOMPARE(auth.registerUser("alice", "secret"), AuthManager::Result::Authorized);
+
+        const QString text = readFile(dir.filePath("auth.txt"));
+        QVERIFY(text.startsWith("alice:pbkdf2_sha256$"));
+        QVERIFY(!text.contains("secret"));
+        QCOMPARE(auth.verify("alice", "secret"), AuthManager::Result::Authorized);
+        QCOMPARE(auth.verify("alice", "wrong"), AuthManager::Result::WrongPassword);
+    }
+
+    void plainPasswordIsHashedOnLogin()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("auth.txt");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("user1:user1\nazbot:azbot:bot:3\n");
+        file.close();
+
+        AuthManager auth(path, dir.filePath("stats.txt"));
+        QCOMPARE(auth.verify("azbot", "nope"), AuthManager::Result::WrongPassword);
+        QVERIFY(readFile(path).contains("azbot:azbot:bot:3"));  // unchanged after a failed login
+        QCOMPARE(auth.verify("azbot", "azbot"), AuthManager::Result::Authorized);
+
+        const QString text = readFile(path);
+        QVERIFY(text.startsWith("user1:user1\n"));             // other accounts untouched
+        QVERIFY(!text.contains("azbot:azbot"));
+        QVERIFY(text.contains(":bot:3\n"));
+        QVERIFY(auth.isBot("azbot"));
+        QCOMPARE(auth.autoConnectionLimit("azbot"), 3);
+        QCOMPARE(auth.verify("azbot", "azbot"), AuthManager::Result::Authorized);
+    }
+
     // NOLINTEND(readability-convert-member-functions-to-static)
 };
 

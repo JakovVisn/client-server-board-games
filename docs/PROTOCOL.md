@@ -215,7 +215,7 @@ One account per line, fields separated by colons. The server reads the file on e
 
 | Line | Account |
 |---|---|
-| `login:password` | human (new logins are appended in this form) |
+| `login:password` | human |
 | `login:password:bot` | bot: many games at once, gets `abort:` when an opponent disconnects |
 | `login:password:bot:N` | league bot: also a target for up to `N` automatic games (matchmaking pass 3) |
 
@@ -225,6 +225,8 @@ alice:secret
 randombot:randombot:bot
 azbot:azbot:bot:3
 ```
+
+Passwords are stored as salted hashes (`pbkdf2_sha256$ITERATIONS$SALT$KEY`). New accounts are written hashed, and a password typed into the file by hand is replaced by its hash on the account's first successful login. The protocol itself sends passwords in plain text, so use it on a trusted network.
 
 Results go to `stats.txt` as `login:wins:losses`. Both files live in the server's working directory; `--auth-file` and `--stats-file` choose other paths.
 
