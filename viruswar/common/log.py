@@ -7,10 +7,8 @@ One log format for the Python bots, the same as the C++ programs (shared/logging
 Levels: DEBUG (protocol traffic), INFO (what happened), WARN (unexpected but handled),
 ERROR (an operation failed). Events are snake_case, details are key=value pairs.
 
-Each script calls setup() once with its component name and log file; modules then log
-through logging.getLogger(__name__). The level comes from VIRUSWAR_LOG_LEVEL (default info).
-Human-readable reports (ladder tables, evaluation summaries) go to Markdown files through
-append_report() instead.
+Each script calls setup() once; modules log through logging.getLogger(__name__).
+Level: VIRUSWAR_LOG_LEVEL (default info). Markdown reports go through append_report().
 """
 
 import logging

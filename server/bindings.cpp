@@ -48,8 +48,7 @@ PYBIND11_MODULE(viruswar_sim, m) {
             return moves;
         });
 
-    // Free function: compute action mask from a serialized board string.
-    // Drop-in replacement for game_logic.valid_action_mask(board, w, h).
+    // board: serialized from the player to move's view, as sent by the server
     m.def("valid_action_mask", [](const std::string& board, int w, int h) {
         if (w <= 0 || h <= 0 || static_cast<int>(board.size()) != w * h)
             throw py::value_error("board length must be w * h, with w and h positive");

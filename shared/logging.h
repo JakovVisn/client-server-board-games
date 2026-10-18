@@ -4,14 +4,12 @@
 #include <QString>
 #include <QtGlobal>
 
-// One log format for every program in the project (the Python bots use the same,
-// see viruswar/common/log.py):
+// One log format for every program (Python: viruswar/common/log.py):
 //
 //   2026-10-18 14:03:22.417 INFO  server  game_start id=7 first=alice second=bob
 //   <date> <time.ms>        <LEVEL> <component> <event> <key=value ...>
 //
-// Levels: DEBUG (protocol traffic), INFO (what happened), WARN (unexpected but handled),
-// ERROR (an operation failed). Events are snake_case, details are key=value pairs.
+// DEBUG: protocol traffic, INFO: what happened, WARN: unexpected but handled, ERROR: failed
 namespace Log {
 
 // Routes qDebug/qInfo/qWarning/qCritical to stderr (and to filePath, if given) in the

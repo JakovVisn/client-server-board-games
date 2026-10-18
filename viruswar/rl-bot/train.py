@@ -1,5 +1,7 @@
 """
-Training script for the VirusWar RL bot (CNN version).
+MaskablePPO training over the server: each env logs in with a training account and
+plays the league bots; a model is promoted after a streak of rollouts above the
+win-rate threshold.
 """
 
 import argparse
@@ -124,7 +126,7 @@ class PromoteCallback(BaseCallback):
             self._streak = 0
             log.info(f"promote step={self.num_timesteps} win_rate={win_rate:.1%} path={full_path}")
 
-            # Prune old models, keep only the most recent keep_last
+            # Keep only the newest keep_last
             existing = sorted(
                 (f for f in os.scandir(self._dir) if f.name.startswith("promoted_") and f.name.endswith(".zip")),
                 key=lambda f: f.name,

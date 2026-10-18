@@ -25,7 +25,6 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
-    // UI
     BoardWidget* boardWidget_ = nullptr;
     QPlainTextEdit* logPanel_ = nullptr;
     QLabel* stateLabel_ = nullptr;
@@ -36,13 +35,11 @@ private:
     QAction* disconnectAction_ = nullptr;
     QPointer<QMessageBox> leaveQuestion_;  // open "Leave the game?" question, if any
 
-    // Core
     GameState gameState_;
     NetworkClient* network_ = nullptr;
     GameClock clock_;
     QElapsedTimer monotonic_;  // time base for clock_
 
-    // Session state
     enum class AppState { Disconnected, Connecting, WaitingForMatch, WaitingForTurn, YourTurn };
     AppState appState_ = AppState::Disconnected;
     int boardWidth_  = 10;

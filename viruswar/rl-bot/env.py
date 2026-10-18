@@ -1,15 +1,8 @@
 """
-Gymnasium environment for VirusWar (CNN version).
+Gymnasium env: one VirusWar game on the server per episode.
 
-Observation shape: (6, H, W)
-
-Channels:
-0 — my regular cells (1)
-1 — my fortress cells (3)
-2 — enemy regular cells (2)
-3 — enemy fortress cells (4)
-4 — empty cells (0)
-5 — moves_remaining (normalized to 0..1, broadcast)
+Observation (6, H, W): one-hot of my (1), my captured (3), enemy (2),
+enemy captured (4) and empty (0) cells, plus moves remaining / 3.
 """
 
 import logging
@@ -25,13 +18,13 @@ from viruswar_sim import valid_action_mask
 
 log = logging.getLogger(__name__)
 
-# Bot protocol: found:GAMEID:OPPONENT:GAMENAME:W:H:role:
+# found:GAMEID:OPPONENT:GAMENAME:W:H:role:
 _RE_FOUND     = re.compile(r"found:(\d+):(\w+):\w+:(\d+):(\d+):(?:first|second):")
-# Bot protocol: go:BOARD:MOVES:GAMEID:
+# go:BOARD:MOVES:GAMEID:
 _RE_GO        = re.compile(r"go:([0-4]+):(\d+):(\d+):")
-# Bot protocol: field1:TYPE:X:Y:GAMEID:
+# field1:TYPE:X:Y:GAMEID:
 _RE_FIELD1    = re.compile(r"field1:\w+:-?\d+:-?\d+:\d+:")
-# Bot protocol: wrongstep:GAMEID:
+# wrongstep:GAMEID:
 _RE_WRONGSTEP = re.compile(r"wrongstep:(\d+):")
 
 
@@ -60,9 +53,7 @@ class VirusWarEnv(gym.Env):
 
         self._update_spaces()
 
-    # =========================================================
-    # Gym API
-    # =========================================================
+    # ── Gym API ─────────────────────────────────────────────────────────────────
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -106,13 +97,13 @@ class VirusWarEnv(gym.Env):
                     or msg == "wrongcmd:"):
                 continue
 
-            # wrongstep: server rejected the move and immediately re-sends go: — just wait for it
+            # wrongstep: the server re-sends go: right after, so just wait for it
             m = _RE_WRONGSTEP.match(msg)
             if m:
                 if m.group(1) != gid:
                     continue
                 log.warning(f"wrongstep login={self._login} move={x},{y} board={self._board}")
-                continue  # server sends go: right after wrongstep; read it and return normally
+                continue
 
             rt_ms = (time.perf_counter() - t0) * 1000
 
@@ -157,9 +148,7 @@ class VirusWarEnv(gym.Env):
             self._client = None
         self._connected = False
 
-    # =========================================================
-    # Connection
-    # =========================================================
+    # ── Connection ──────────────────────────────────────────────────────────────
 
     def _try_connect(self):
         """Try credentials in order, skip accounts that are alreadyconnected."""
@@ -179,9 +168,7 @@ class VirusWarEnv(gym.Env):
                 raise
         raise ConnectionError("No training account available (all alreadyconnected)")
 
-    # =========================================================
-    # Observation (CNN format)
-    # =========================================================
+    # ── Observation (CNN format) ────────────────────────────────────────────────
 
     def _obs(self) -> np.ndarray:
         board = np.array([int(c) for c in self._board],
@@ -210,8 +197,6 @@ class VirusWarEnv(gym.Env):
 
         return obs
 
-    # =========================================================
-
     def _update_spaces(self):
         self.observation_space = spaces.Box(
             low=0.0,
@@ -220,8 +205,6 @@ class VirusWarEnv(gym.Env):
             dtype=np.float32,
         )
         self.action_space = spaces.Discrete(self.w * self.h)
-
-    # =========================================================
 
     def _wait_for_game(self) -> tuple[str, int]:
         while True:

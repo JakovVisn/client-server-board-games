@@ -69,10 +69,7 @@ void VirusWarGame::advanceTurn()
 
 void VirusWarGame::initFromBoard(const std::string& board, int movesRemaining)
 {
-    // board is serialised from currentPlayer_'s perspective:
-    //   '1' = my cell (X), '2' = opponent cell (O),
-    //   '3' = my captured (CatchX), '4' = opponent captured (CatchO)
-    // Both fields are rebuilt, and the turn position is set from movesRemaining.
+    // board is from currentPlayer_'s view
     const int me  = currentPlayer_;
     const int opp = 1 - currentPlayer_;
     for (int i = 0; i < width_ * height_; ++i) {

@@ -161,8 +161,7 @@ void GameSession::onTimeout()
 
 void GameSession::finishGame(Client* winner, Client* loser, GameOverCause cause)
 {
-    // Every caller checks isFinished_ first; set right away so nothing re-enters
-    // while the results are sent
+    // Set first so nothing re-enters while the results are sent
     Q_ASSERT(!isFinished_);
     isFinished_ = true;
     deadline_.stop();
@@ -173,8 +172,7 @@ void GameSession::finishGame(Client* winner, Client* loser, GameOverCause cause)
         authManager_->recordLoss(loser->login());
     }
 
-    // A bot whose opponent disconnected gets abort: instead of a result, so the
-    // game is not counted as a real win in its own bookkeeping (training)
+    // A bot whose opponent disconnected gets abort:, so training doesn't count it as a win
     auto notify = [this, cause](Client* p, bool won) {
         if (p->status() == Client::Status::Disconnected) return;
         if (cause == GameOverCause::Disconnect && p->isBot())
@@ -197,7 +195,7 @@ void GameSession::finishGame(Client* winner, Client* loser, GameOverCause cause)
     if (onFinished_) onFinished_();
 }
 
-// ── Unified message helpers ───────────────────────────────────────────────────
+// ── Message helpers ───────────────────────────────────────────────────────────
 
 void GameSession::sendFound(Client* receiver, Client* opponent, const QString& role) const
 {
@@ -213,8 +211,7 @@ void GameSession::sendGo(Client* player) const
         .arg(QString::fromStdString(game_->serializeForCurrentPlayer()))
         .arg(game_->movesRemaining())
         .arg(id_);
-    // With a time control: the mover's time left, then the opponent's
-    // (Turn mode: the full turn limit the opponent will get)
+    // Mover's time left, then the opponent's (turnN: the full limit they will get)
     if (timeControl_.mode != TimeControl::Mode::None) {
         const qint64 opponentMs = (timeControl_.mode == TimeControl::Mode::Turn)
             ? timeControl_.baseMs : clockMs_[1 - currentPlayerIndex_];

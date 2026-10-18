@@ -5,8 +5,7 @@
 #include <QMap>
 #include <QString>
 
-// Who plays whom: a pure function of the waiting clients, so the rules can be unit-tested
-// without sockets. Server::matchClients() builds the candidates and starts the games.
+// Who plays whom, as a pure function so the rules are unit-tested without sockets
 namespace Matchmaking {
 
 struct Candidate

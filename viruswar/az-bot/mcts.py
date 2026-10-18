@@ -1,11 +1,9 @@
 """
-Monte Carlo Tree Search for VirusWar (AlphaZero style).
+AlphaZero-style MCTS for VirusWar.
 
-Key design decisions:
-  - Each sub-move is a separate tree node (VirusWar has 3 sub-moves per turn)
-  - Network provides prior probabilities and value — no random rollouts
-  - Q is stored from node.player's perspective; selection corrects for player switches
-  - Dirichlet noise added to the root of every move, reused subtrees included (training only)
+Each sub-move (3 per turn) is its own tree node; the network gives priors and
+values (no rollouts). Q is stored from node.player's view and flipped across
+turn boundaries.
 """
 
 import numpy as np
@@ -44,9 +42,7 @@ class MCTSNode:
         best_action, best_child = -1, None
 
         for action, child in self.children.items():
-            # Q from THIS node's player perspective:
-            # within a turn player doesn't change → q = child.Q
-            # across a turn boundary players flip   → q = -child.Q
+            # child.Q is from child.player's view: flip it across a turn boundary
             q = child.Q if child.player == self.player else -child.Q
             score = q + c_puct * child.prior * sqrt_n / (1 + child.N)
             if score > best_score:
@@ -67,17 +63,14 @@ class MCTSNode:
             tr = child_game.turn_result()
             is_terminal = tr == TurnResult.GameOver
 
-            # Advance turn BEFORE creating the node so child.player is correct:
-            # for GameOver: current player is the winner (no advance)
-            # for TurnComplete: next player takes over (must advance first)
-            # for Ongoing: same player continues (no advance)
+            # Advance before creating the node so child.player is the player to move
+            # (on GameOver it stays the winner)
             if tr == TurnResult.TurnComplete:
                 child_game.advance_turn()
 
             child = MCTSNode(child_game, prior=float(policy[action]))
 
             if is_terminal:
-                # advance_turn was NOT called → child.player = winner (correct)
                 child.terminal = True
                 child.terminal_value = 1.0
 
@@ -94,7 +87,7 @@ def _add_dirichlet_noise(node: MCTSNode, alpha: float, eps: float) -> None:
 
 
 def _evaluate(node: MCTSNode, net: AZNet) -> tuple[np.ndarray, float]:
-    """Run network on node's position. Returns (policy, value)."""
+    """Network output for node's position: ((policy, value), legal mask)."""
     g = node.game
     mask = np.array(
         sim.valid_action_mask(g.serialize(), g.width(), g.height()),
@@ -113,22 +106,10 @@ def run_mcts(root: MCTSNode,
              dirichlet_alpha: float = 0.3,
              dirichlet_eps: float = 0.25,
              add_noise: bool = True) -> MCTSNode:
-    """
-    Run n_sims MCTS simulations from root, updating visit counts in-place.
-
-    Args:
-        root:            Root node (will be expanded on first sim if needed)
-        net:             AlphaZero network for prior + value
-        n_sims:          Number of simulations
-        c_puct:          Exploration constant in PUCT formula
-        dirichlet_alpha: Concentration for Dirichlet noise
-        dirichlet_eps:   Mix weight for Dirichlet noise (0 = no noise)
-        add_noise:       Whether to add Dirichlet noise to root (True during training)
-    Returns:
-        root (same object, visit counts updated)
-    """
-    # Noise must hit every move's root, including subtrees reused from the
-    # previous move (those are already expanded), so expand the root up front.
+    """Run n_sims simulations from root, updating visit counts in place; returns root.
+    add_noise (training only) mixes Dirichlet noise into the root priors."""
+    # Noise must hit every move's root, reused (already expanded) subtrees included,
+    # so expand the root up front
     if add_noise:
         if not root.is_expanded():
             (policy, v), mask = _evaluate(root, net)
@@ -155,8 +136,7 @@ def run_mcts(root: MCTSNode,
             node.expand(policy, mask)
 
         # ── Backpropagation ───────────────────────────────────────────────────
-        # v is from node.player's perspective.
-        # Each ancestor gets +v if same player, -v if opposite player.
+        # v is from the leaf player's view: negate it for the other player's nodes
         leaf_player = node.player
         for n in path:
             n.N += 1
@@ -166,12 +146,7 @@ def run_mcts(root: MCTSNode,
 
 
 def get_action_probs(root: MCTSNode, temperature: float = 1.0) -> np.ndarray:
-    """
-    Convert root's child visit counts to an action probability distribution.
-
-    temperature=1  → proportional to counts (exploration during training)
-    temperature=0  → argmax of counts (deterministic inference)
-    """
+    """Root visit counts as action probabilities: τ=1 proportional, τ=0 one-hot argmax."""
     n_actions = root.game.width() * root.game.height()
     counts = np.zeros(n_actions, dtype=np.float32)
     for action, child in root.children.items():
@@ -187,5 +162,4 @@ def get_action_probs(root: MCTSNode, temperature: float = 1.0) -> np.ndarray:
 
 
 def make_root(game: sim.VirusWarGame) -> MCTSNode:
-    """Create a fresh root node for the given game state."""
     return MCTSNode(game, prior=1.0)

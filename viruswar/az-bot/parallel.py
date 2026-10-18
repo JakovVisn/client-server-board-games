@@ -1,13 +1,9 @@
 """
 Parallel self-play and pit on a ProcessPoolExecutor.
 
-Profiling showed ~70% of MCTS time is single-position network inference, so
-the cheap speed-up is one game per process, each process running torch with a
-single thread.
-
-Nets reach workers as files: NetStore writes each version under a new path and
-workers cache loaded nets by path, so a net is loaded once per worker instead
-of being pickled into every task.
+~70% of MCTS time is single-position inference, so each process plays one game with
+single-threaded torch. Nets reach workers as files (a new path per version), cached
+by path, so each worker loads a net once instead of unpickling it with every task.
 """
 
 import multiprocessing as mp

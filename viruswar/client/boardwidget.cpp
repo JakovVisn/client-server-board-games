@@ -22,7 +22,7 @@ void BoardWidget::loadPixmaps()
     pixmaps_[3] = QPixmap(":/images/catch_blue.png");
     pixmaps_[4] = QPixmap(":/images/catch_red.png");
 
-    newPixmaps_[0] = QPixmap();  // NewCell::None — unused
+    newPixmaps_[0] = QPixmap();
     newPixmaps_[1] = QPixmap(":/images/new_blue.png");
     newPixmaps_[2] = QPixmap(":/images/new_catch_blue.png");
     newPixmaps_[3] = QPixmap(":/images/new_red.png");
@@ -98,7 +98,6 @@ void BoardWidget::paintEvent(QPaintEvent*)
         }
     }
 
-    // Grid
     p.setPen(QPen(kGridColor, 1));
     for (int x = 0; x <= W; ++x)
         p.drawLine(br.x() + x * cs, br.y(), br.x() + x * cs, br.y() + H * cs);

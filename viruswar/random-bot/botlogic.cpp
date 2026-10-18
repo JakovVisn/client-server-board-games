@@ -3,9 +3,8 @@
 
 namespace BotLogic {
 
-// Mirrors Field::isConnectedToX from the server.
-// Starting from an empty/opponent cell at (x,y), searches 8-directionally
-// through CatchMine ('3') cells for a Mine ('1') cell.
+// Mirrors the server's VirusWarField::isConnectedToX: 8-connected path from (x,y)
+// through my captured cells ('3') to one of my pieces ('1').
 static bool isConnectedToMine(const QString& board, int w, int h,
                                int x, int y, QVector<bool>& visited)
 {
@@ -32,9 +31,8 @@ static bool isConnectedToMine(const QString& board, int w, int h,
     return false;
 }
 
-// Mirrors Field::isValidMove from the server.
-// Board values from the bot's perspective: 0=Clear, 1=Mine, 2=Opponent,
-// 3=CapturedByMe, 4=CapturedByOpponent.
+// Mirrors the server's VirusWarField::isValidMove. Cells, from the bot's view: 0 empty,
+// 1 mine, 2 opponent, 3 captured by me, 4 captured by the opponent.
 bool isValidMove(const QString& board, int w, int h, int x, int y)
 {
     if (x < 0 || y < 0 || x >= w || y >= h) return false;

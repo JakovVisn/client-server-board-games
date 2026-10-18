@@ -1,19 +1,13 @@
 """
 AlphaZero training loop for VirusWar.
 
-Each iteration:
-  1. Self-play  — N_SELF_PLAY games with MCTS, run in parallel worker processes
-  2. Value check — the net's value head on the fresh (not yet trained-on) games
-  3. Buffer     — keep a random POSITION_KEEP fraction of each game's positions
-  4. Train      — augmented mini-batches from the replay buffer; the number of
-                  steps follows the amount of new data (SAMPLE_REUSE)
-  5. Pit        — every EVAL_EVERY iters, evaluate net vs previous best (parallel)
-  6. Promote    — save to promoted/ if win rate >= PROMOTE_THRESHOLD
+Each iteration: parallel self-play → value check on the fresh games → keep
+POSITION_KEEP of each game's positions in the replay buffer → augmented training
+(steps follow SAMPLE_REUSE) → every EVAL_EVERY iterations a pit against the newest
+promoted model, promoted at PROMOTE_THRESHOLD.
 
-Auto-resumes from the latest checkpoint in --models-dir if no --load given,
-restoring the replay buffer and optimizer from train_state.pt when it matches
-that checkpoint. The pit opponent is always the newest promoted model.
-Saves an untrained seed model to promoted/ on first run if none exists.
+Resumes from the latest checkpoint (with buffer and optimizer from train_state.pt);
+the first run saves an untrained seed model to promoted/.
 
 Usage:
     cd viruswar/az-bot
@@ -52,14 +46,10 @@ N_SELF_PLAY       = int(os.getenv("AZ_SELF_PLAY_GAMES",    "40"))
 N_SIMS            = int(os.getenv("AZ_N_SIMS",             "200"))
 TEMPERATURE_MOVES = int(os.getenv("AZ_TEMPERATURE_MOVES",  "20"))
 
-# Consecutive positions of a game are near-identical boards sharing one outcome,
-# so the value head can memorise "which game is this" instead of learning to
-# evaluate (AlphaGo hit the same problem and trained on one position per game).
-# Keeping a random fraction per game decorrelates the buffer.
+# Positions of one game are near-identical and share one outcome, so the value head
+# can memorise games instead of learning to evaluate; keeping a fraction decorrelates them.
 POSITION_KEEP     = float(os.getenv("AZ_POSITION_KEEP",    "0.25"))
-# Training steps per iteration = kept_positions * SAMPLE_REUSE / BATCH_SIZE,
-# i.e. each kept position is sampled ~SAMPLE_REUSE times while in the buffer.
-# The first run trained ~20x per position and memorised its games.
+# Steps per iteration = kept positions * SAMPLE_REUSE / BATCH_SIZE; ~20x reuse made the first run memorise
 SAMPLE_REUSE      = float(os.getenv("AZ_SAMPLE_REUSE",     "3"))
 MIN_BUFFER        = int(os.getenv("AZ_MIN_BUFFER",         "10000"))
 BATCH_SIZE        = int(os.getenv("AZ_BATCH_SIZE",         "256"))
@@ -229,8 +219,8 @@ def _train(args) -> None:
     total_games = _games_in_name(load_path) if load_path else 0
 
     optimizer = torch.optim.Adam(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    # Plain list, not deque: random.sample indexes into the middle, which is O(n) on a deque
     state_path = os.path.join(args.models_dir, "train_state.pt")
+    # Plain list, not deque: random.sample indexes into the middle, which is O(n) on a deque
     replay_buffer = (_load_state(state_path, total_games, optimizer) if load_path else None) or []
     log.info(f"resume_state buffer={len(replay_buffer)}"
              f" optimizer={'restored' if replay_buffer else 'fresh'}")
@@ -240,9 +230,8 @@ def _train(args) -> None:
     if not any(promoted_path.glob("promoted_*.pt")) if promoted_path.exists() else True:
         _promote(net, total_games, 0.0, args.promoted_dir)
 
-    # best_net is the snapshot we pit against: the newest promoted model, which on a
-    # resume can be stronger than the checkpoint we continue from.
-    # It only ever runs inference, so keep it in eval mode (BatchNorm running stats).
+    # Pit opponent: the newest promoted model (on resume it may beat the loaded checkpoint).
+    # Inference only, so eval mode (BatchNorm running stats).
     best_file  = max(promoted_path.glob("promoted_*.pt"), key=lambda p: p.stem)
     best_net   = AZNet.load(str(best_file)).eval()
     best_games = _games_in_name(str(best_file))

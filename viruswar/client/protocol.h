@@ -2,8 +2,7 @@
 
 #include <QString>
 
-// Server protocol V2 as the client needs it (docs/PROTOCOL.md). Pure functions, no I/O,
-// so they can be unit-tested with the example sessions from the docs.
+// The server protocol V2 as the client needs it (docs/PROTOCOL.md); pure, so unit-tested
 namespace Protocol {
 
 struct ServerMessage
@@ -12,7 +11,7 @@ struct ServerMessage
         Unknown,
         Ping,          // ping:
         CommandError,  // wrongcmd:
-        LoginError,    // wrongver: wronguser: alreadyconnected: badgame: servererror:  (text = the line)
+        LoginError,    // wrongver: wronguser: alreadyconnected: badgame: servererror:
         LoginOk,       // mbserver:VERSION:GAME:W:H:        (width/height 0 for any:any)
         Found,         // found:ID:OPPONENT:GAME:W:H:ROLE:[TIME:]
         Go,            // go:BOARD:MOVES:ID:[MYTIME:OPPTIME:]

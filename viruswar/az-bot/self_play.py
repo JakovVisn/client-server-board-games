@@ -22,20 +22,13 @@ def play_game(
     dirichlet_eps: float = 0.25,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], int]:
     """
-    Play one complete self-play game.
-
-    Temperature schedule (move selection only):
-      - First `temperature_moves` sub-moves: τ=1 (sample proportionally to visit counts)
-      - Remaining moves: τ=0 (argmax — deterministic)
-    This ensures early game diversity while late game is optimal.
-    The policy target is always the τ=1 visit distribution.
+    Play one self-play game: moves sampled with τ=1 for the first
+    `temperature_moves` sub-moves, then greedy.
 
     Returns:
-        (examples, winner) where examples is a list of (obs, pi, z) in move order:
-          obs: (6, H, W) float32  — board state from the moving player's view
-          pi:  (H*W,)   float32  — MCTS visit count distribution (policy target)
-          z:   float             — game outcome: +1.0 win, -1.0 loss (from obs player's view)
-        and winner is the player (0 or 1) who won.
+        (examples, winner): examples in move order as (obs, pi, z) —
+        obs (6, H, W) from the mover's view, pi (H*W,) visit distribution,
+        z = +1 / -1 outcome for the mover; winner is 0 or 1.
     """
     game = sim.VirusWarGame()
     root = make_root(game)
@@ -51,9 +44,8 @@ def play_game(
                  dirichlet_eps=dirichlet_eps,
                  add_noise=True)
 
-        # The training target is always the full visit distribution; temperature
-        # only picks the move to play. Storing the τ=0 one-hot as the target
-        # taught a collapsed prior that blinded the search.
+        # Target is always the τ=1 distribution: τ=0 one-hot targets collapse the prior
+        # and blind the search. Temperature only picks the move played.
         pi = get_action_probs(root, temperature=1.0)
         play_pi = pi if move_count < temperature_moves else get_action_probs(root, temperature=0)
 
@@ -61,11 +53,10 @@ def play_game(
         obs = board_to_obs(g.serialize(), g.moves_remaining(), g.width(), g.height())
         history.append((obs, pi, root.player))
 
-        # Sample or pick action from policy
         action = int(np.random.choice(len(play_pi), p=play_pi))
         move_count += 1
 
-        # Tree reuse: descend into selected child
+        # Tree reuse
         root = root.children[action]
         root.prior = 1.0  # prior is irrelevant for root
 

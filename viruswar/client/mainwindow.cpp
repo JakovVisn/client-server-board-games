@@ -114,7 +114,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         if (inGame()) {  // the game may have ended while the question was open
             resultShown_ = true;  // closing: no "connection lost" dialog when the socket closes
             network_->resign();
-            network_->disconnectGracefully(kResignWaitMs);  // deliver resign: before closing
+            network_->disconnectGracefully(kResignWaitMs);
         }
     }
     network_->disconnectFromServer();
@@ -298,8 +298,7 @@ void MainWindow::connectWithSettings()
 void MainWindow::onDisconnectClicked()
 {
     if (inGame()) {
-        // Resign instead of just dropping the connection: the server answers
-        // lose:...:resign:, and showGameOver() reports it and disconnects
+        // Resign rather than drop the connection; showGameOver() then reports lose:…:resign:
         if (confirmLeavingGame() && inGame())  // it may have ended while the question was open
             network_->resign();
         return;
@@ -327,8 +326,7 @@ bool MainWindow::confirmLeavingGame()
 
 void MainWindow::showGameOver(bool won, const QString& cause)
 {
-    // The one place that explains a result; cause is the server's CAUSE field,
-    // or connection_lost when the connection broke mid-game
+    // cause: the server's CAUSE field, or connection_lost if the connection broke mid-game
     static const QHash<QString, QString> winReasons = {
         {"rules",      "Your opponent can't make 3 moves."},
         {"timeout",    "Your opponent ran out of time."},
@@ -450,7 +448,6 @@ void MainWindow::updateClock()
 
     const Side running = clock_.running();
     if (clock_.turnLimit()) {
-        // Only the side to move has a running limit
         if (running == Side::Mine)
             clockLabel_->setText("Your time " + format(clock_.remaining(Side::Mine, t), true));
         else if (running == Side::Opponent)

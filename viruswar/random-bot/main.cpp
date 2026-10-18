@@ -54,6 +54,7 @@ int main(int argc, char* argv[])
     auto* bot = new BotClient(host, port, login, password, preferred, &app);
     bot->start();
 
+    // The handler only counts signals; 1st: finish active games, 2nd: quit at once
     QTimer signalPoller;
     QObject::connect(&signalPoller, &QTimer::timeout, [bot] {
         const int n = g_signalCount.load();

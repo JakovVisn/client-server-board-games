@@ -3,8 +3,7 @@
 #include <QObject>
 #include <QTcpSocket>
 
-// The TCP connection to the server: sends the client's messages and turns the server's
-// lines (parsed by Protocol::parse) into signals for the current game.
+// The connection to the server: sends commands, turns the server's lines into signals
 class NetworkClient : public QObject
 {
     Q_OBJECT

@@ -1,22 +1,13 @@
 """
 Ladder: one AZ model against a random bot and a spread of older promoted models.
 
-Pit only compares each candidate with the previous best, so a run of
-promotions says little about total progress (and 100-game pits let lucky
-models through). The ladder measures the target model against fixed points
-of its history instead: win rate should rise the further back the opponent is.
+Pit only compares with the previous best; the ladder measures total progress
+against fixed points of the history. All opponents play the same paired random
+openings with greedy MCTS, in parallel worker processes (stop training first).
+Results go to --log (win rate, 95% interval, Elo diff) and a table to --report.
 
-Every opponent plays the same paired random openings (both sides of each),
-greedy MCTS with the pit's simulation count. Games run in parallel worker
-processes; stop training first or both will fight over the CPU.
-
-Each finished match is logged (--log, one event line per opponent: win rate,
-95% interval, implied Elo difference); the summary table is appended to the
-Markdown report (--report).
-
-Any player can also be an RL bot model (rl-bot promoted_*.zip): it plays its
-policy's best legal move, without search, as rl-bot/play.py does. With an RL
---model and no --opponents, the opponents are picked from its own folder.
+RL models (rl-bot promoted_*.zip) can play too, policy only without search;
+for an RL --model without --opponents, opponents come from its own folder.
 
 Usage:
     cd viruswar/az-bot

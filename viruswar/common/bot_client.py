@@ -24,8 +24,7 @@ class ServerConnection:
         self._buf = b""
 
     def connect(self, preferred_opponent: str = ""):
-        # Connect and log in with a timeout; afterwards reads block, since a bot waits
-        # indefinitely for games
+        # Timeout only for connect + login; afterwards reads block (a bot waits for games indefinitely)
         sock = socket.create_connection((self.host, self.port), timeout=CONNECT_TIMEOUT_SECS)
         self._sock = sock
         self._buf = b""

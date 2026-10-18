@@ -144,7 +144,7 @@ void BotClient::parseLine(const QString& line)
         return;
     }
 
-    // field1:, field2:, wrongver:, wronguser:, etc.
+    // Ignored: field1:, field2:, login errors, ...
 }
 
 void BotClient::makeMove(const QString& board, int w, int h, int gameId)

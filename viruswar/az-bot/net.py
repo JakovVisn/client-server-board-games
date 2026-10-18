@@ -1,11 +1,6 @@
 """
-AlphaZero network for VirusWar.
-
-Architecture:
-  Input : (6, H, W) float32 — same channel encoding as rl-bot
-  Trunk : stem conv + N residual blocks
-  Policy: 2-plane conv → flatten → H*W logits
-  Value : 1-plane conv → 64 → tanh scalar
+AlphaZero network for VirusWar: (6, H, W) observation (same encoding as rl-bot)
+→ stem conv + residual tower → policy logits (H*W) and value in [-1, 1].
 """
 
 import numpy as np
@@ -64,7 +59,6 @@ class AZNet(nn.Module):
             *[ResBlock(trunk_channels) for _ in range(n_blocks)]
         )
 
-        # Policy head: 2 feature planes → H*W logits
         self.policy_head = nn.Sequential(
             nn.Conv2d(trunk_channels, 2, 1, bias=False),
             nn.BatchNorm2d(2),
@@ -73,7 +67,6 @@ class AZNet(nn.Module):
             nn.Linear(2 * board_h * board_w, n_actions),
         )
 
-        # Value head: 1 feature plane → scalar in [-1, +1]
         self.value_head = nn.Sequential(
             nn.Conv2d(trunk_channels, 1, 1, bias=False),
             nn.BatchNorm2d(1),
@@ -86,15 +79,7 @@ class AZNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Training forward pass.
-
-        Args:
-            x: (B, 6, H, W)
-        Returns:
-            log_p: (B, H*W)  — log-softmax policy (for cross-entropy loss)
-            v:     (B, 1)    — value in [-1, +1]
-        """
+        """x: (B, 6, H, W) → log_p (B, H*W) log-softmax policy, v (B, 1) value in [-1, 1]."""
         trunk = self.tower(self.stem(x))
         log_p = F.log_softmax(self.policy_head(trunk), dim=-1)
         v     = self.value_head(trunk)
@@ -103,20 +88,14 @@ class AZNet(nn.Module):
     @torch.no_grad()
     def predict(self, obs: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, float]:
         """
-        Single-position inference for MCTS leaf evaluation.
-
-        Args:
-            obs:  (6, H, W) float32 — from board_to_obs()
-            mask: (H*W,)    bool    — True where the move is legal
-        Returns:
-            policy: (H*W,) float32 — masked softmax probabilities (prior for MCTS)
-            value:  float          — position evaluation in [-1, +1]
+        Single-position inference: obs (6, H, W), mask (H*W,) bool of legal moves
+        → (policy (H*W,) masked softmax, value in [-1, 1]).
         """
         x = torch.from_numpy(obs).unsqueeze(0)          # (1, 6, H, W)
         trunk = self.tower(self.stem(x))
 
         logits = self.policy_head(trunk).squeeze(0)      # (H*W,)
-        logits[~torch.from_numpy(mask)] = -1e9           # mask illegal moves
+        logits[~torch.from_numpy(mask)] = -1e9
         policy = torch.softmax(logits, dim=-1).numpy()
 
         value = self.value_head(trunk).item()

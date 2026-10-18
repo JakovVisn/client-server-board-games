@@ -52,8 +52,7 @@ ConnectDialog::ConnectDialog(QWidget* parent)
     widthSpin_->setToolTip(sizeTip);
     heightSpin_->setToolTip(sizeTip);
 
-    // Hidden unless asked for: without it the server default applies and anyone can be matched.
-    // Protocol time controls: see docs/PROTOCOL.md#time-control
+    // Values are protocol time controls: docs/PROTOCOL.md#time-control
     customTimeCheck_ = new QCheckBox("Custom time control");
     customTimeCheck_->setToolTip("Unchecked: the server's default time limit (60 s per turn "
                                  "unless the server is configured otherwise), any opponent.");

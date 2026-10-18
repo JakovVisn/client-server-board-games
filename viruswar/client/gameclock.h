@@ -3,9 +3,8 @@
 #include <QString>
 #include <QtGlobal>
 
-// Both players' clocks as the client shows them. The server is the source of truth: every
-// go: resyncs them (sync), and between updates the running one is counted down locally.
-// Time is passed in (a monotonic ms counter), so the class has no timers and is testable.
+// Both players' clocks: every go: resyncs them from the server, and in between the running
+// one counts down locally. Time is passed in (monotonic ms), so there are no timers to test.
 class GameClock
 {
 public:

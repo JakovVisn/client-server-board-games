@@ -70,7 +70,7 @@ private:
     void sendField1(Client* player, const QString& type, int x, int y) const;
     void sendField2(Client* player, const QString& type, int x, int y) const;
     void sendWrongStep(Client* player) const;
-    [[nodiscard]] static QString causeName(GameOverCause cause);  // the CAUSE field of win: / lose:
+    [[nodiscard]] static QString causeName(GameOverCause cause);
     void sendResult(Client* player, bool won, GameOverCause cause) const;
     void sendAbort(Client* player) const;
 };

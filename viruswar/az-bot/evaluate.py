@@ -1,14 +1,7 @@
 """
-Offline diagnostics for AZ models. No server connection needed.
-
-For every model it checks:
-  1. Value head — on positions from random-play games, does sign(v) predict
-     the actual winner? A trained net must beat the ~50% of an untrained one.
-  2. Raw policy — argmax of the policy head (no search) vs a uniform random player.
-  3. MCTS strength — greedy MCTS vs the random player and vs the untrained seed.
-
-Games use paired random openings (both sides of every opening), like pit().
-Results are logged to --log, one event line each.
+Offline diagnostics per AZ model: value-head sign accuracy on random-play games,
+raw policy vs random, and greedy MCTS vs random and vs the untrained seed.
+Paired random openings like the pit; results go to --log. For strength, use ladder.py.
 
 Usage:
     cd viruswar/az-bot

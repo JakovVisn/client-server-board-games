@@ -13,8 +13,7 @@ namespace ServerConfig {
     inline constexpr int INACTIVE_MAX_MS = 300000;
     // A connection must send a valid mbclient: within this time
     inline constexpr int LOGIN_TIMEOUT_MS = 10000;
-    // After a game a human is not matched again for this long, so a client that
-    // leaves after each game (the Qt client) is gone before a new game could start
+    // Humans wait this long before a rematch, so a client that leaves after each game gets away
     inline constexpr int POST_GAME_HOLD_MS = 2000;
     // Longest accepted protocol line; a peer sending more without a newline is dropped
     inline constexpr int MAX_LINE_BYTES = 4096;

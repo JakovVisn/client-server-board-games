@@ -324,7 +324,7 @@ def main():
     for t in threads:
         t.start()
 
-    # Watch promoted-dir; notify slots when it changes
+    # Poll promoted-dir; slots reload when it changes
     last_snapshot: list[str] = []
     try:
         while True:

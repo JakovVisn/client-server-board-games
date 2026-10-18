@@ -74,9 +74,8 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
 
     // Groups: 1=VERSION 2=LOGIN 3=PASSWORD 4=GAMENAME(opt) 5=WIDTH(opt) 6=HEIGHT(opt)
     //         7=TARGET(opt, may be empty) 8=TIME(opt)
-    // WIDTH:HEIGHT: a size, 0:0 for the game's default, or any:any for whatever size the opponent wants
-    // TARGET: "login" or "login/N" or "login1/N1,login2/N2"
-    // TIME: a time control (time_control.h); it needs the TARGET field, which may be empty
+    // WIDTH:HEIGHT may be 0:0 (default) or any:any; TARGET: login[/N][,login[/N]...];
+    // TIME (time_control.h) needs the TARGET field, which may be empty
     static const QRegularExpression rx(
         QString(R"(^mbclient:(\d+):([\w]{%1,%2}):([\w]{%3,%4})(?::([\w]+)(?::(\d{1,4}|any):(\d{1,4}|any)(?::([\w/,]*)(?::([\w+]+))?)?)?)?:$)")
             .arg(AuthConfig::LOGIN_LENGTH_MIN)
@@ -332,8 +331,7 @@ void Server::startSession(Client* a, Client* b, Client* autoBot)
     if (QRandomGenerator::global()->bounded(2))  // who moves first
         std::swap(a, b);
 
-    // Humans, and the seeker of an auto-match, play one game at a time; other bots stay
-    // Authorized and keep playing their other games
+    // Humans and auto-match seekers play one game at a time; other bots stay Authorized
     for (Client* p : {a, b})
         if (!p->isBot() || (autoBot && p != autoBot))
             p->setStatus(Client::Status::InGame);
@@ -437,8 +435,7 @@ void Server::disconnectClient(Client* client)
     if (client->isBot()) {
         markClientDisconnected(client);
         // Collect first: finishing a game re-runs matchmaking, which adds to sessionById_.
-        // The finished sessions stay until timerEvent, so a late step: or resign: from the
-        // opponent is ignored, not answered with wrongcmd:
+        // Finished sessions stay until timerEvent, so the opponent's late step: is ignored
         QList<GameSession*> games;
         for (GameSession* session : std::as_const(sessionById_))
             if (session->involvesPlayer(client))

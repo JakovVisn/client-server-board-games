@@ -1,9 +1,8 @@
 """
-League inference script for the AlphaZero bot.
+League inference bot for AZ models.
 
-Each bot slot maintains a persistent TCP connection and plays games
-using MCTS guided by AZNet. State (game + MCTS root) is tracked
-per game_id so tree reuse works across sub-moves within a turn.
+Each slot keeps one server connection and plays its games with MCTS; game +
+MCTS root are kept per game_id so the tree is reused within a turn.
 
 Usage:
     cd viruswar/az-bot
@@ -176,9 +175,8 @@ class BotSlot:
     def _pick_move(self, gs: GameState, board: str, moves_remaining: int) -> int:
         in_sync = board == gs.game.serialize() and moves_remaining == gs.game.moves_remaining()
         if moves_remaining == 3 or not in_sync:
-            # New turn: start from the server's authoritative board. Mid-turn the local game
-            # must already match it; if not (e.g. after a wrongstep:), rebuild it the same way
-            # instead of searching a wrong tree
+            # Rebuild from the server's board at each turn start, or mid-turn when out of
+            # sync (e.g. after wrongstep:), rather than search a wrong tree
             if moves_remaining != 3:
                 log.warning(f"desync login={self.login} moves_remaining={moves_remaining}"
                             f" local_moves_remaining={gs.game.moves_remaining()}")
@@ -196,7 +194,6 @@ class BotSlot:
         pi     = get_action_probs(gs.root, temperature=0)
         action = int(np.argmax(pi))
 
-        # Apply move to local game and reuse subtree
         gs.game.apply_move(action % gs.w, action // gs.w)
         gs.root = gs.root.children[action]
         gs.root.prior = 1.0
