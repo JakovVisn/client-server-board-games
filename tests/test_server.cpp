@@ -270,6 +270,15 @@ private slots:
         QVERIFY(pairings({bot, leagueBot("azbot", 0)}, 2).empty());
     }
 
+    void bothPreferenceLimitsApply()
+    {
+        Candidate a{"bota", true, 0, 0, {{"botb", 5}}};
+        Candidate b{"botb", true, 0, 0, {{"bota", 1}}};
+        QCOMPARE(pairings({a, b}).size(), size_t(1));
+        QVERIFY(pairings({a, b}, 1).empty());
+        QVERIFY(pairings({b, a}, 1).empty());
+    }
+
     void incompatibleClientsAreNotPaired()
     {
         const auto p = Matchmaking::findPairings({human("alice"), human("bob")},

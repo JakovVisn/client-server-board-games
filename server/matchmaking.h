@@ -28,7 +28,7 @@ struct Pairing
 // activeGames(i, j): games i and j are playing against each other now.
 //
 // Pass 1, preferred opponents: i lists j's login, j agrees (no preferences of its own, or
-//   lists i), and they play fewer than the limit together.
+//   lists i), and they play fewer than the limit together (the lower one if both set one).
 // Pass 2, human vs human: humans without preferences.
 // Pass 3, seekers vs league bots: clients without preferences and without an auto limit,
 //   against bots with a free auto slot.

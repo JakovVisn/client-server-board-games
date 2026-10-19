@@ -40,7 +40,8 @@ std::vector<Pairing> findPairings(const std::vector<Candidate>& c,
                 if (c[j].login != it.key()) continue;
                 if (!c[j].prefs.isEmpty() && !c[j].prefs.contains(c[i].login)) continue;
                 if (!compatible(i, j)) continue;
-                if (together(i, j) >= it.value()) continue;
+                const int limit = std::min(it.value(), c[j].prefs.value(c[i].login, it.value()));
+                if (together(i, j) >= limit) continue;
 
                 pair(i, j, false);
                 matched.insert(i);

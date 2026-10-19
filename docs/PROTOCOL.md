@@ -207,7 +207,7 @@ Examples: `turn60`, `game300`, `game300+5`. Limits: `turn` 1â€“3600 s, `game` 1â
 
 Each pass considers only logged-in clients that are not in a game and have not sent `nomatch:`. Bots stay eligible while they play (see [Several games at once](#several-games-at-once)); a pass 3 seeker waits for its game to end.
 
-1. **Preferred opponents.** `TARGET` lists the logins you want to play: `bob`, `bob/3` (up to 3 simultaneous games with bob) or `bob/3,carol`. The default limit is 1. Both sides must agree: a target with preferences of its own is matched only if it lists the requester. `TARGET` must follow `GAME:W:H`, so spell those out even for the defaults: `mbclient:2:alice:secret:viruswar:10:10:bob:`.
+1. **Preferred opponents.** `TARGET` lists the logins you want to play: `bob`, `bob/3` (up to 3 simultaneous games with bob) or `bob/3,carol`. The default limit is 1. Both sides must agree: a target with preferences of its own is matched only if it lists the requester, and then the lower of the two limits applies. `TARGET` must follow `GAME:W:H`, so spell those out even for the defaults: `mbclient:2:alice:secret:viruswar:10:10:bob:`.
 2. **Random human vs human**, for humans without preferences.
 3. **Seekers vs league bots.** Clients without preferences and without an auto limit are matched against bot accounts with free auto slots (`autoLimit`).
 
