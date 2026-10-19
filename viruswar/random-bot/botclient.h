@@ -37,4 +37,5 @@ private:
     QMap<int, QPair<int,int>> gameSizes_;
     int  activeGames_   = 0;
     bool shuttingDown_  = false;
+    bool loginRejected_ = false;
 };

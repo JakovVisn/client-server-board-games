@@ -74,7 +74,9 @@ void BotClient::onConnected()
 void BotClient::onDisconnected()
 {
     Log::info(QString("disconnected login=%1").arg(login_));
-    if (shuttingDown_) {
+    if (loginRejected_) {
+        QCoreApplication::exit(1);
+    } else if (shuttingDown_) {
         QCoreApplication::quit();
     } else {
         gameSizes_.clear();
@@ -109,9 +111,22 @@ void BotClient::parseLine(const QString& line)
 {
     if (line == "ping:") { send("pong:"); return; }
 
+    static const QRegularExpression rxLoginError(
+        R"(^(wrongver|wronguser|alreadyconnected|badgame|servererror):$)");
+    auto m = rxLoginError.match(line);
+    if (m.hasMatch()) {
+        const QString error = m.captured(1);
+        // Only these can clear up: our old connection times out, auth.txt becomes readable
+        const bool retry = error == "alreadyconnected" || error == "servererror";
+        Log::warn(QString("login_failed login=%1 error=%2 action=%3")
+                      .arg(login_, error, retry ? "retry" : "quit"));
+        loginRejected_ = !retry;
+        return;
+    }
+
     // win:/lose:GAMEID:CAUSE: or abort:GAMEID:
     static const QRegularExpression rxResult(R"(^(win|lose|abort):(\d+):(?:(\w+):)?)");
-    auto m = rxResult.match(line);
+    m = rxResult.match(line);
     if (m.hasMatch()) {
         const int id = m.captured(2).toInt();
         Log::info(QString("game_over id=%1 result=%2 cause=%3")
@@ -160,7 +175,7 @@ void BotClient::parseLine(const QString& line)
         return;
     }
 
-    // Ignored: field1:, field2:, login errors, ...
+    // Ignored: field1:, field2:, ...
 }
 
 void BotClient::makeMove(const QString& board, int w, int h, int gameId)
