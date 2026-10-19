@@ -248,12 +248,14 @@ void MainWindow::setupNetwork()
         showError(texts.value(error, error));
     });
 
+    // inGame() before aborting: abort() emits disconnected() synchronously
     connect(network_, &NetworkClient::connectionError, this, [this](const QString& message) {
+        if (inGame()) {
+            showGameOver(false, "connection_lost");  // disconnects too
+            return;
+        }
         network_->disconnectFromServer();
-        if (inGame())
-            showGameOver(false, "connection_lost");
-        else
-            showError(message);
+        showError(message);
     });
 }
 
