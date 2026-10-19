@@ -4,13 +4,20 @@
 
 A multiplayer board game platform: a game server, a desktop client and bots.
 
+## Highlights
+
+- **AlphaZero-style bot** trained only by self-play (~22k games): it wins every game against the random bot and the RL bot, and beat a human 16 games out of 17. A ladder tournament measures its progress across promotions ([results](viruswar/az-bot/README.md)).
+- **An honest dead end:** the earlier PPO bot plateaued, so it was measured, frozen and documented ([why](viruswar/rl-bot/README.md)).
+- **One game core** (Qt-free C++) shared by the server, the random bot and, through pybind11, the Python bots.
+- **Server:** matchmaking as a pure, unit-tested function, chess-style clocks, resignation and results with a cause. C++ and Python tests run in CI.
+
 ## Components
 
-- **Server** - runs many games and players at once. A new game plugs in with minimal changes to the server.
+- **Server** - runs many games and players at once over a text protocol on TCP ([docs/PROTOCOL.md](docs/PROTOCOL.md)). A new game plugs in with minimal changes to the server.
 - **Client** - desktop GUI to connect, log in and play.
 - **Random bot** - plays random valid moves; a training opponent for the RL bot.
-- **RL bot** - reinforcement learning agent (MaskablePPO, self-play). Frozen: it plateaued far below the AZ bot, see [viruswar/rl-bot/README.md](viruswar/rl-bot/README.md).
-- **AZ bot** - AlphaZero-style agent: tree search guided by a neural network, trained by pure self-play. The strongest player, see [viruswar/az-bot/README.md](viruswar/az-bot/README.md).
+- **RL bot** - reinforcement learning agent (MaskablePPO, league self-play over the server), frozen ([details](viruswar/rl-bot/README.md)).
+- **AZ bot** - AlphaZero-style agent: Monte Carlo tree search guided by a policy/value network ([details](viruswar/az-bot/README.md)).
 
 ## Virus War
 
@@ -21,14 +28,7 @@ A two-player territory game on a grid.
 - Placing on an opponent's piece **captures** it: the cell is yours for good and extends your territory.
 - You win when your opponent cannot make 3 moves.
 
-Exact rules: [viruswar/PROTOCOL.md](viruswar/PROTOCOL.md#rules-as-enforced-by-the-server).
-
-## Protocol
-
-Clients and bots talk to the server in a line-based text protocol over TCP, port 1234.
-
-- [docs/PROTOCOL.md](docs/PROTOCOL.md): messages, session lifecycle, matchmaking and accounts, common to every game.
-- [viruswar/PROTOCOL.md](viruswar/PROTOCOL.md): Virus War board encoding, rules and a full example session.
+Exact rules, board encoding and a full example game: [viruswar/PROTOCOL.md](viruswar/PROTOCOL.md#rules-as-enforced-by-the-server).
 
 ## Getting started
 
@@ -87,29 +87,3 @@ cd viruswar && .venv/bin/python -m pytest tests   # Python: log format, server c
 ```
 
 The Python tests need the built `viruswar_sim`. None of the tests start a server or a bot. GitHub Actions runs both suites on every push (`.github/workflows/ci.yml`).
-
-## Logging
-
-All programs log in one format, so their logs read and grep the same way:
-
-```
-2026-10-18 14:03:22.417 INFO  server  game_start id=7 first=alice second=bob board=10x10 time=turn60
-2026-10-18 14:04:10.902 INFO  server  game_over id=7 winner=bob loser=alice cause=timeout
-2026-10-18 14:04:11.120 WARN  azbot   slow_move login=azbot move=12 secs=11.2 sims=400
-```
-
-Each line: date and time, level, program, event name, `key=value` details. Levels: `DEBUG` (every protocol line, passwords masked), `INFO` (what happened), `WARN` (unexpected but handled), `ERROR`.
-
-| Program | Name in the log | Level | Log file |
-|---|---|---|---|
-| `GameServer` | `server` | `--log-level` (default `info`) | `--log-file` (none by default) |
-| `VirusWarRandomBot` | `randbot` | `--log-level` | `--log-file` |
-| `VirusWarClient` | `client` | `debug`, shown in the window's log panel | none |
-| AZ bot | `azbot`, `aztrain`, `ladder`, `azeval` | `VIRUSWAR_LOG_LEVEL` (default `info`) | `models/play_az.log`, `train_az.log`, `ladder_az.log`, `eval_az.log` |
-| RL bot | `rlbot`, `rltrain`, `rlenv` | `VIRUSWAR_LOG_LEVEL` | `models/play_rl.log`, `train_rl.log` |
-
-Reports meant for reading, such as the ladder's result table (`models/ladder_az.md`), stay in Markdown. Code: `shared/logging.h` (C++), `viruswar/common/log.py` (Python).
-
-## TODO
-
-- Client: hand-drawn art style for the board and pieces

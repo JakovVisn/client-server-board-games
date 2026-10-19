@@ -66,7 +66,7 @@ cp .env.example .env
 models/
   checkpoints/   az_NNNNNNNNNN.pt (every 5 iterations) + train_state.pt
   promoted/      promoted_NNNNNNNNNN.pt, read by play.py; promoted_0000000000 is the untrained seed
-  train_az.log  play_az.log  eval_az.log  ladder_az.log   event logs (see Logging in the main README)
+  train_az.log  play_az.log  eval_az.log  ladder_az.log   event logs, one line per event
   ladder_az.md                                          ladder result tables
 ```
 
