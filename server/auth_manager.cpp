@@ -60,6 +60,12 @@ bool matches(const QString& stored, const QString& password)
                      QByteArray::fromHex(f[3].toLatin1()));
 }
 
+bool lacksFinalNewline(QFile& file)
+{
+    char last = 0;
+    return file.size() > 0 && file.seek(file.size() - 1) && file.getChar(&last) && last != '\n';
+}
+
 }  // namespace
 
 AuthManager::AuthManager(QString authFilePath, QString statsFilePath)
@@ -135,12 +141,13 @@ void AuthManager::storeHash(const QString& login, const QString& password) const
 AuthManager::Result AuthManager::registerUser(const QString& login, const QString& password) const
 {
     QFile file(filePath_);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
+    if (!file.open(QIODevice::ReadWrite | QIODevice::Append | QIODevice::Text)) {
         Log::warn(QString("auth_file_error op=append path=%1").arg(Log::quoted(filePath_)));
         return Result::Error;
     }
 
     QTextStream out(&file);
+    if (lacksFinalNewline(file)) out << "\n";  // edited by hand
     out << login << ":" << hashPassword(password) << "\n";
     return Result::Authorized;
 }

@@ -336,6 +336,22 @@ private slots:
         QCOMPARE(auth.verify("azbot", "azbot"), AuthManager::Result::Authorized);
     }
 
+    void registeringAfterALineWithoutNewline()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("auth.txt");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("azbot:azbot:bot:3");
+        file.close();
+
+        AuthManager auth(path, dir.filePath("stats.txt"));
+        QCOMPARE(auth.registerUser("bob", "secret"), AuthManager::Result::Authorized);
+        QVERIFY(readFile(path).startsWith("azbot:azbot:bot:3\nbob:pbkdf2_sha256$"));
+        QCOMPARE(auth.autoConnectionLimit("azbot"), 3);
+        QCOMPARE(auth.verify("bob", "secret"), AuthManager::Result::Authorized);
+    }
+
     // NOLINTEND(readability-convert-member-functions-to-static)
 };
 
