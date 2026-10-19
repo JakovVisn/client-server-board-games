@@ -12,6 +12,8 @@ add_library(VirusWarCore STATIC
     virus_war_game.h virus_war_game.cpp
 )
 target_compile_features(VirusWarCore PUBLIC cxx_std_17)
+# Also linked into the viruswar_sim shared module, which needs -fPIC on Linux
+set_target_properties(VirusWarCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(VirusWarCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ── Qt server executable ─────────────────────────────────────────────────────
