@@ -41,5 +41,5 @@ jobs:
 
       - name: Python tests
         run: |
-          ln -s ../../build/server/viruswar_sim*.so viruswar/az-bot/
+          ln -s "$PWD"/build/server/viruswar_sim*.so viruswar/az-bot/
           cd viruswar && .venv/bin/python -m pytest tests
