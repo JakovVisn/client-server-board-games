@@ -211,7 +211,9 @@ class BotSlot:
                     m = _RE_GO.match(msg)
                     if m:
                         board, moves, game_id = m.group(1), int(m.group(2)), int(m.group(3))
-                        w, h = game_sizes.get(game_id, (10, 10))
+                        if game_id not in active:  # e.g. a game resigned during shutdown
+                            continue
+                        w, h = game_sizes[game_id]
                         obs  = build_obs(board, moves, w, h)
                         mask = np.array(valid_action_mask(board, w, h), dtype=bool)
 
