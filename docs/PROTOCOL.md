@@ -89,18 +89,22 @@ States are the server's `Client::Status` (`server/client.h`), seen from one clie
 stateDiagram-v2
     [*] --> Unauthenticated: TCP connect
     Unauthenticated --> Authorized: mbclient → mbserver
-    Unauthenticated --> Disconnected: mbclient → wrongver, wronguser,<br/>alreadyconnected, badgame, servererror
+    Unauthenticated --> Disconnected: mbclient → wrongver, wronguser,<br/>alreadyconnected, badgame, servererror,<br/>or no valid mbclient within 10 s
     Authorized --> InGame: matchmaking → found
     state InGame {
         [*] --> Waiting
         Waiting --> YourTurn: go
         Waiting --> Waiting: field1 (opponent's sub-move)
-        YourTurn --> YourTurn: step → wrongstep, go
-        YourTurn --> Waiting: step → field2
+        YourTurn --> YourTurn: step → field2, go (sub-moves left)<br/>step → wrongstep, go
+        YourTurn --> Waiting: step → field2 (turn over)
     }
-    InGame --> Authorized: win / lose: rules, timeout, resign<br/>(back in the matchmaking pool)
+    InGame --> Authorized: win / lose: rules, timeout, resign<br/>(back in the matchmaking pool; humans after 2 s)
     InGame --> Disconnected: connection lost or 300 s inactive<br/>(opponent wins: disconnect)
     Authorized --> Disconnected: connection lost or 300 s inactive
+    note right of Authorized
+        After nomatch the client stays
+        logged in but is never matched again
+    end note
     Disconnected --> [*]
 ```
 
