@@ -16,11 +16,10 @@ target_compile_features(VirusWarCore PUBLIC cxx_std_17)
 set_target_properties(VirusWarCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(VirusWarCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ── Qt server executable ─────────────────────────────────────────────────────
+# ── Qt server: a library for the executable and the tests ──────────────────
 find_package(Qt6 REQUIRED COMPONENTS Core Network)
 
-qt_add_executable(GameServer
-    main.cpp
+add_library(GameServerLib STATIC
     auth_manager.h auth_manager.cpp
     client.h client.cpp
     game_session.h game_session.cpp
@@ -29,7 +28,11 @@ qt_add_executable(GameServer
     server.h server.cpp
     time_control.h time_control.cpp
 )
-target_link_libraries(GameServer PRIVATE VirusWarCore SharedLog Qt6::Core Qt6::Network)
+target_include_directories(GameServerLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(GameServerLib PUBLIC VirusWarCore SharedLog Qt6::Core Qt6::Network)
+
+qt_add_executable(GameServer main.cpp)
+target_link_libraries(GameServer PRIVATE GameServerLib)
 
 # ── Optional pybind11 Python extension ──────────────────────────────────────
 set(PYBIND11_FINDPYTHON ON)  # use modern FindPython, respects Python_EXECUTABLE
