@@ -12,6 +12,11 @@ add_executable(test_server test_server.cpp)
 target_link_libraries(test_server PRIVATE GameServerLib Qt6::Test)
 add_test(NAME test_server COMMAND test_server)
 
+# A real Server on a local port, driven through sockets
+add_executable(test_network test_network.cpp)
+target_link_libraries(test_network PRIVATE GameServerLib Qt6::Test)
+add_test(NAME test_network COMMAND test_network)
+
 # Client protocol parsing and game clock
 add_executable(test_client
     test_client.cpp

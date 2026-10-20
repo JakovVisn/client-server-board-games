@@ -73,7 +73,7 @@ Login errors (the server then closes the connection):
 |---|---|
 | `wrongver:` | `VERSION` is not 2 |
 | `wronguser:` | Wrong password for an existing login |
-| `alreadyconnected:` | This login is already connected |
+| `alreadyconnected:` | This bot login is already connected. A human login with the right password replaces its old connection instead |
 | `badgame:` | Unknown game name, a board size the game does not accept, or an invalid `TIME` |
 | `servererror:` | The server could not read or write `auth.txt` |
 
@@ -99,8 +99,8 @@ stateDiagram-v2
         YourTurn --> Waiting: step → field2 (turn over)
     }
     InGame --> Authorized: win / lose: rules, timeout, resign<br/>(back in the matchmaking pool; humans after 2 s)
-    InGame --> Disconnected: connection lost or 300 s inactive<br/>(opponent wins: disconnect)
-    Authorized --> Disconnected: connection lost or 300 s inactive
+    InGame --> Disconnected: connection lost, 300 s inactive<br/>or replaced (opponent wins: disconnect)
+    Authorized --> Disconnected: connection lost, 300 s inactive or replaced
     note right of Authorized
         After nomatch the client stays
         logged in but is never matched again
@@ -127,7 +127,7 @@ Every ending sends `win:GAMEID:CAUSE:` to the winner and `lose:GAMEID:CAUSE:` to
 | `rules` | lost by the game's rules (Virus War: can't make a full turn) |
 | `timeout` | ran out of time ([Time control](#time-control)) |
 | `resign` | sent `resign:` |
-| `disconnect` | lost the connection or was inactive for 300 s; only the winner is told, and a bot winner gets `abort:GAMEID:` instead of `win:` |
+| `disconnect` | lost the connection, was inactive for 300 s, or logged in again from a new connection; only the winner is told, and a bot winner gets `abort:GAMEID:` instead of `win:` |
 
 ### Several games at once
 

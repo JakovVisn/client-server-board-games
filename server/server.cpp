@@ -131,13 +131,6 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         result = authManager_.registerUser(login, password);
 
     if (result == AuthManager::Result::Authorized) {
-        if (isAlreadyConnected(login)) {
-            Log::info(QString("login_failed login=%1 reason=alreadyconnected").arg(login));
-            client->send("alreadyconnected:");
-            client->closeConnection();
-            return true;
-        }
-
         const QString gameName = gameNameParam.isEmpty()
             ? ServerConfig::DEFAULT_GAME_NAME : gameNameParam;
         auto it = gamePrototypes_.find(gameName);
@@ -177,6 +170,18 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
                 client->closeConnection();
                 return true;
             }
+        }
+
+        if (Client* old = connectedClient(login)) {
+            // A bot here is a second instance; a human is back after a drop we haven't noticed
+            if (old->isBot()) {
+                Log::info(QString("login_failed login=%1 reason=alreadyconnected").arg(login));
+                client->send("alreadyconnected:");
+                client->closeConnection();
+                return true;
+            }
+            Log::info(QString("disconnect login=%1 reason=replaced").arg(Log::quoted(login)));
+            disconnectClient(old);
         }
 
         client->setBot(authManager_.isBot(login));
@@ -275,13 +280,14 @@ bool Server::checkProtocolVersion(const QString& version)
     return ok && v == static_cast<int>(ServerConfig::PROTOCOL_VERSION);
 }
 
-bool Server::isAlreadyConnected(const QString& login) const
+Client* Server::connectedClient(const QString& login) const
 {
-    return std::any_of(clients_.begin(), clients_.end(), [&login](const Client* c) {
+    const auto it = std::find_if(clients_.begin(), clients_.end(), [&login](const Client* c) {
         return c->login() == login
             && c->status() != Client::Status::Disconnected
             && c->status() != Client::Status::Unauthenticated;
     });
+    return it == clients_.end() ? nullptr : *it;
 }
 
 std::unique_ptr<AbstractGame> Server::makeGame(const Client* a, const Client* b) const
