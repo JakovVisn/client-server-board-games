@@ -1,5 +1,4 @@
 // Unit tests for the client's pure parts: protocol parsing and the game clock.
-#include <QObject>
 #include <QTest>
 #include "gameclock.h"
 #include "protocol.h"
