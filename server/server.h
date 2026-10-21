@@ -48,6 +48,7 @@ private:
 
     void parseData(const QString& cmd, Client* client);
     [[nodiscard]] bool stateAuthorize(const QString& cmd, Client* client);
+    static void rejectLogin(Client* client, const QString& reason);
     [[nodiscard]] bool stateReceiveSteps(const QString& cmd, Client* client);
     [[nodiscard]] bool stateReceiveResign(const QString& cmd, Client* client);
     [[nodiscard]] static bool stateReceivePing(const QString& cmd, Client* client);

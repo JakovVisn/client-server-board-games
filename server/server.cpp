@@ -175,9 +175,7 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     }
 
     if (!checkProtocolVersion(version)) {
-        Log::info(QString("login_failed login=%1 reason=wrongver").arg(login));
-        client->send("wrongver:");
-        client->closeConnection();
+        rejectLogin(client, "wrongver");
         return true;
     }
 
@@ -185,17 +183,13 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         ? ServerConfig::DEFAULT_GAME_NAME : gameNameParam;
     auto it = gamePrototypes_.find(gameName);
     if (it == gamePrototypes_.end()) {
-        Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-        client->send("badgame:");
-        client->closeConnection();
+        rejectLogin(client, "badgame");
         return true;
     }
     AbstractGame* proto = it->second.get();
 
     if (anyWidth != anyHeight) {
-        Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-        client->send("badgame:");
-        client->closeConnection();
+        rejectLogin(client, "badgame");
         return true;
     }
     if (anyWidth) {
@@ -205,9 +199,7 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         w = defW;
         h = defH;
     } else if (!proto->isValidBoardSize(w, h)) {
-        Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-        client->send("badgame:");
-        client->closeConnection();
+        rejectLogin(client, "badgame");
         return true;
     }
 
@@ -215,9 +207,7 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     if (!timeParam.isEmpty()) {
         timeControl = TimeControl::parse(timeParam);
         if (!timeControl) {
-            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-            client->send("badgame:");
-            client->closeConnection();
+            rejectLogin(client, "badgame");
             return true;
         }
     }
@@ -237,9 +227,7 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         if (Client* old = connectedClient(login)) {
             // A bot here is a second instance; a human is back after a drop we haven't noticed
             if (old->isBot()) {
-                Log::info(QString("login_failed login=%1 reason=alreadyconnected").arg(login));
-                client->send("alreadyconnected:");
-                client->closeConnection();
+                rejectLogin(client, "alreadyconnected");
                 return true;
             }
             Log::info(QString("disconnect login=%1 reason=replaced").arg(Log::quoted(login)));
@@ -267,16 +255,19 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     }
 
     if (result == AuthManager::Result::WrongPassword) {
-        Log::info(QString("login_failed login=%1 reason=wronguser").arg(login));
-        client->send("wronguser:");
-        client->closeConnection();
+        rejectLogin(client, "wronguser");
         return true;
     }
 
-    Log::warn(QString("login_failed login=%1 reason=servererror").arg(login));
-    client->send("servererror:");
-    client->closeConnection();
+    rejectLogin(client, "servererror");
     return true;
+}
+
+void Server::rejectLogin(Client* client, const QString& reason)
+{
+    Log::info(QString("login_failed login=%1 reason=%2").arg(client->login(), reason));
+    client->send(reason + ':');
+    client->closeConnection();
 }
 
 bool Server::stateReceiveSteps(const QString& cmd, Client* client)
