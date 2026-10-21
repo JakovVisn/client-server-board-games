@@ -153,6 +153,17 @@ private slots:
         QVERIFY(first.servedByServer());
     }
 
+    void invalidRequestRegistersNothing()
+    {
+        Peer peer(port());
+        peer.send("mbclient:2:newcomer:secret:viruswar:99:99:");
+        QCOMPARE(peer.nextLine(), QString("badgame:"));
+
+        QFile auth(dir_->filePath("auth.txt"));
+        QVERIFY(auth.open(QIODevice::ReadOnly | QIODevice::Text));
+        QVERIFY(!auth.readAll().contains("newcomer"));
+    }
+
     void secondBotInstanceIsRejected()
     {
         Peer first(port());

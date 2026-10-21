@@ -181,6 +181,47 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         return true;
     }
 
+    const QString gameName = gameNameParam.isEmpty()
+        ? ServerConfig::DEFAULT_GAME_NAME : gameNameParam;
+    auto it = gamePrototypes_.find(gameName);
+    if (it == gamePrototypes_.end()) {
+        Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
+        client->send("badgame:");
+        client->closeConnection();
+        return true;
+    }
+    AbstractGame* proto = it->second.get();
+
+    if (anyWidth != anyHeight) {
+        Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
+        client->send("badgame:");
+        client->closeConnection();
+        return true;
+    }
+    if (anyWidth) {
+        w = h = 0;  // decided per game by the opponent's size
+    } else if (w == 0 && h == 0) {
+        auto [defW, defH] = proto->defaultBoardSize();
+        w = defW;
+        h = defH;
+    } else if (!proto->isValidBoardSize(w, h)) {
+        Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
+        client->send("badgame:");
+        client->closeConnection();
+        return true;
+    }
+
+    std::optional<TimeControl> timeControl;
+    if (!timeParam.isEmpty()) {
+        timeControl = TimeControl::parse(timeParam);
+        if (!timeControl) {
+            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
+            client->send("badgame:");
+            client->closeConnection();
+            return true;
+        }
+    }
+
     const QString peer = client->socket()->peerAddress().toString();
     if (!loginLimiter_.allow(peer, uptime_.elapsed())) {
         Log::warn(QString("login_failed login=%1 peer=%2 reason=rate_limited").arg(login, peer));
@@ -193,47 +234,6 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
         result = authManager_.registerUser(login, password);
 
     if (result == AuthManager::Result::Authorized) {
-        const QString gameName = gameNameParam.isEmpty()
-            ? ServerConfig::DEFAULT_GAME_NAME : gameNameParam;
-        auto it = gamePrototypes_.find(gameName);
-        if (it == gamePrototypes_.end()) {
-            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-            client->send("badgame:");
-            client->closeConnection();
-            return true;
-        }
-        AbstractGame* proto = it->second.get();
-
-        if (anyWidth != anyHeight) {
-            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-            client->send("badgame:");
-            client->closeConnection();
-            return true;
-        }
-        if (anyWidth) {
-            w = h = 0;  // decided per game by the opponent's size
-        } else if (w == 0 && h == 0) {
-            auto [defW, defH] = proto->defaultBoardSize();
-            w = defW;
-            h = defH;
-        } else if (!proto->isValidBoardSize(w, h)) {
-            Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-            client->send("badgame:");
-            client->closeConnection();
-            return true;
-        }
-
-        std::optional<TimeControl> timeControl;
-        if (!timeParam.isEmpty()) {
-            timeControl = TimeControl::parse(timeParam);
-            if (!timeControl) {
-                Log::info(QString("login_failed login=%1 reason=badgame").arg(login));
-                client->send("badgame:");
-                client->closeConnection();
-                return true;
-            }
-        }
-
         if (Client* old = connectedClient(login)) {
             // A bot here is a second instance; a human is back after a drop we haven't noticed
             if (old->isBot()) {
