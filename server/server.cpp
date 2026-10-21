@@ -27,6 +27,44 @@ bool Server::start(const QHostAddress& address, quint16 port)
     return true;
 }
 
+void Server::shutDown(int graceMs)
+{
+    if (state_ != State::Running) return;
+    state_ = State::Draining;
+    drainDeadline_.setRemainingTime(graceMs);
+    close();
+    Log::info(QString("server_shutdown games=%1 grace_ms=%2").arg(runningGames()).arg(graceMs));
+    continueShutdown();
+}
+
+void Server::continueShutdown()
+{
+    for (Client* client : clients_) {
+        if (client->status() == Client::Status::Disconnected || inGame(client)) continue;
+        Log::info(QString("disconnect login=%1 reason=shutdown").arg(Log::quoted(client->login())));
+        markClientDisconnected(client);
+    }
+
+    const int games = runningGames();
+    if (games > 0 && !drainDeadline_.hasExpired()) return;
+    state_ = State::Stopped;
+    Log::info(QString("server_stop games_cut=%1").arg(games));
+    emit stopped();
+}
+
+int Server::runningGames() const
+{
+    return static_cast<int>(std::count_if(sessions_.begin(), sessions_.end(),
+        [](const std::unique_ptr<GameSession>& s) { return !s->isFinished(); }));
+}
+
+bool Server::inGame(const Client* client) const
+{
+    return std::any_of(sessions_.begin(), sessions_.end(), [client](const auto& s) {
+        return !s->isFinished() && s->involvesPlayer(client);
+    });
+}
+
 void Server::incomingConnection(qintptr socketDescriptor)
 {
     auto* socket = new QTcpSocket(this);
@@ -359,6 +397,8 @@ void Server::startSession(Client* a, Client* b, Client* autoBot)
 
 void Server::matchClients()
 {
+    if (state_ != State::Running) return;
+
     std::vector<Client*> pool;
     for (auto* c : clients_) {
         if (c->status() == Client::Status::Authorized && c->isMatching() && !c->inPostGameHold())
@@ -427,6 +467,8 @@ void Server::timerEvent(QTimerEvent* event)
         ++it;
     }
 
+    if (state_ == State::Draining)
+        continueShutdown();
     matchClients();
 }
 

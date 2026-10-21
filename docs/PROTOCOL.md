@@ -185,6 +185,10 @@ alice C: pong:
 - After **300 s** without activity, the client is disconnected. Only `step:`, `resign:`, `nomatch:` and `pong:` count as activity.
 - So a client that answers every `ping:` is never disconnected, even if it never moves. In a game, the [time control](#time-control) handles that: the player who stops moving loses on time.
 
+## Server shutdown
+
+On SIGTERM or Ctrl+C the server stops accepting connections and starting games. Clients not in a game are disconnected at once; a player in a game is disconnected when the game ends. Games still running after `--shutdown-grace` seconds (default 300) end without a result and without stats. A second signal stops the server at once.
+
 ## Time control
 
 Each game has a time control, written as one word:

@@ -19,6 +19,9 @@ namespace ServerConfig {
     inline constexpr int MAX_LINE_BYTES = 4096;
     // Used when neither player asks for a time control (see time_control.h)
     inline const QString DEFAULT_TIME_CONTROL = QStringLiteral("turn60");
+    // After SIGTERM, running games get this long to finish (--shutdown-grace)
+    inline constexpr int SHUTDOWN_GRACE_S = 300;
+    inline constexpr int SHUTDOWN_GRACE_MAX_S = 24 * 3600;
 }
 
 namespace AuthConfig {

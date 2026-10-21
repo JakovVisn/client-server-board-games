@@ -1,5 +1,6 @@
 // A real Server on a local port, driven by clients over TCP sockets.
 #include <memory>
+#include <QSignalSpy>
 #include <QTest>
 #include "server.h"
 
@@ -64,13 +65,21 @@ private:
 
 QString login(const QString& name) { return QString("mbclient:2:%1:%1:").arg(name); }
 
+// Both log in and are paired; returns the game id
+QString startGame(Peer& a, Peer& b)
+{
+    a.send(login("alice"));
+    b.send(login("bob"));
+    return b.lineStartingWith("found:").section(':', 1, 1);
+}
+
 }  // namespace
 
 class TestNetwork : public QObject
 {
     Q_OBJECT
 
-    QTemporaryDir dir_;
+    std::unique_ptr<QTemporaryDir> dir_;
     std::unique_ptr<Server> server_;
 
     quint16 port() const { return server_->serverPort(); }
@@ -78,15 +87,20 @@ class TestNetwork : public QObject
 private slots:
     void init()
     {
-        QFile auth(dir_.filePath("auth.txt"));
+        dir_ = std::make_unique<QTemporaryDir>();
+        QFile auth(dir_->filePath("auth.txt"));
         QVERIFY(auth.open(QIODevice::WriteOnly | QIODevice::Text));
         auth.write("bot1:bot1:bot\n");
         auth.close();
-        server_ = std::make_unique<Server>(dir_.filePath("auth.txt"), dir_.filePath("stats.txt"));
+        server_ = std::make_unique<Server>(dir_->filePath("auth.txt"), dir_->filePath("stats.txt"));
         QVERIFY(server_->start(QHostAddress::LocalHost, 0));
     }
 
-    void cleanup() { server_.reset(); }
+    void cleanup()
+    {
+        server_.reset();
+        dir_.reset();
+    }
 
     void humanLoginReplacesTheOldConnection()
     {
@@ -105,11 +119,8 @@ private slots:
     {
         Peer alice(port());
         Peer bob(port());
-        alice.send(login("alice"));
-        bob.send(login("bob"));
-        const QString found = bob.lineStartingWith("found:");
-        QVERIFY(!found.isEmpty());
-        const QString gameId = found.section(':', 1, 1);
+        const QString gameId = startGame(alice, bob);
+        QVERIFY(!gameId.isEmpty());
 
         Peer aliceAgain(port());
         aliceAgain.send(login("alice"));
@@ -151,6 +162,54 @@ private slots:
         second.send(login("bot1"));
         QCOMPARE(second.nextLine(), QString("alreadyconnected:"));
         QVERIFY(first.servedByServer());
+    }
+
+    void shutdownClosesIdleClientsAndStopsListening()
+    {
+        Peer idle(port());
+        idle.send(login("alice"));
+        QVERIFY(!idle.lineStartingWith("mbserver:").isEmpty());
+
+        const quint16 oldPort = port();
+        QSignalSpy stopped(server_.get(), &Server::stopped);
+        server_->shutDown(kWaitMs);
+        QCOMPARE(stopped.count(), 1);  // no games to wait for
+        QVERIFY(idle.waitForDisconnect());
+
+        QTcpSocket late;
+        late.connectToHost(QHostAddress::LocalHost, oldPort);
+        QVERIFY(waitUntil([&late] { return late.state() == QAbstractSocket::UnconnectedState; }));
+    }
+
+    void runningGameFinishesBeforeStop()
+    {
+        Peer alice(port());
+        Peer bob(port());
+        const QString gameId = startGame(alice, bob);
+        QVERIFY(!gameId.isEmpty());
+
+        QSignalSpy stopped(server_.get(), &Server::stopped);
+        server_->shutDown(kWaitMs);
+        QVERIFY(alice.servedByServer());
+        QCOMPARE(stopped.count(), 0);
+
+        alice.send(QString("resign:%1:").arg(gameId));
+        QCOMPARE(bob.lineStartingWith("win:"), QString("win:%1:resign:").arg(gameId));
+        QTRY_COMPARE_WITH_TIMEOUT(stopped.count(), 1, kWaitMs);  // may fire while bob waits
+        QVERIFY(alice.waitForDisconnect());
+        QVERIFY(bob.waitForDisconnect());
+    }
+
+    void graceCutsGamesWithoutAResult()
+    {
+        Peer alice(port());
+        Peer bob(port());
+        QVERIFY(!startGame(alice, bob).isEmpty());
+
+        QSignalSpy stopped(server_.get(), &Server::stopped);
+        server_->shutDown(300);
+        QTRY_COMPARE_WITH_TIMEOUT(stopped.count(), 1, kWaitMs);
+        QVERIFY(!QFile::exists(dir_->filePath("stats.txt")));
     }
 };
 

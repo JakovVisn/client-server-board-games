@@ -3,6 +3,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <QDeadlineTimer>
 #include <QMap>
 #include <QTcpServer>
 #include "abstract_game.h"
@@ -19,6 +20,12 @@ public:
                     QObject* parent = nullptr);
     [[nodiscard]] bool start(const QHostAddress& address, quint16 port);
     void setDefaultTimeControl(const TimeControl& tc) { defaultTimeControl_ = tc; }
+    // Stops accepting connections and starting games; running games may finish within graceMs
+    void shutDown(int graceMs);
+
+signals:
+    // After shutDown(): every game is over, or the grace period cut the rest without a result
+    void stopped();
 
 protected:
     void incomingConnection(qintptr socketDescriptor) override;
@@ -31,6 +38,9 @@ private:
     std::list<std::unique_ptr<GameSession>> sessions_;
     QMap<int, GameSession*> sessionById_;
     TimeControl defaultTimeControl_;
+    enum class State { Running, Draining, Stopped };
+    State state_ = State::Running;
+    QDeadlineTimer drainDeadline_;
 
     void parseData(const QString& cmd, Client* client);
     [[nodiscard]] bool stateAuthorize(const QString& cmd, Client* client);
@@ -46,6 +56,9 @@ private:
     [[nodiscard]] TimeControl timeControlFor(const Client* a, const Client* b) const;
     [[nodiscard]] int countActiveSessions(const Client* a, const Client* b) const;
     void matchClients();
+    [[nodiscard]] int runningGames() const;
+    [[nodiscard]] bool inGame(const Client* client) const;
+    void continueShutdown();
     // Starts a game between a and b; autoBot is the league bot of a pass-3 auto-match
     void startSession(Client* a, Client* b, Client* autoBot = nullptr);
     void disconnectClient(Client* client);
