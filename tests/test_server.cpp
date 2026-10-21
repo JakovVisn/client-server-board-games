@@ -1,5 +1,9 @@
 // Unit tests for the server's parts that need no sockets: Virus War rules, time controls,
 // matchmaking, login rate limiting and account storage.
+#include <vector>
+#include <QFile>
+#include <QObject>
+#include <QTemporaryDir>
 #include <QTest>
 #include "auth_manager.h"
 #include "matchmaking.h"

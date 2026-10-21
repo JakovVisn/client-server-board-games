@@ -1,6 +1,13 @@
 // A real Server on a local port, driven by clients over TCP sockets.
 #include <memory>
+#include <vector>
+#include <QDeadlineTimer>
+#include <QFile>
+#include <QHostAddress>
+#include <QObject>
 #include <QSignalSpy>
+#include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QTest>
 #include "server.h"
 #include "server_constants.h"
