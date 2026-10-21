@@ -17,6 +17,14 @@ namespace ServerConfig {
     inline constexpr int POST_GAME_HOLD_MS = 2000;
     // Longest accepted protocol line; a peer sending more without a newline is dropped
     inline constexpr int MAX_LINE_BYTES = 4096;
+    // Output queued for a peer that doesn't read; normal play stays at a few hundred bytes
+    inline constexpr qint64 MAX_PENDING_WRITE_BYTES = 64 * 1024;
+    // Login attempts per IP (each costs one PBKDF2): a burst, then one per interval.
+    // The burst covers a restart: league bots plus RL envs trying rltrain_1..10 in turn (~62)
+    inline constexpr int LOGIN_BURST = 100;
+    inline constexpr qint64 LOGIN_REFILL_MS = 2000;
+    // Connections per IP that have not logged in yet
+    inline constexpr int MAX_PENDING_LOGINS_PER_IP = 32;
     // Used when neither player asks for a time control (see time_control.h)
     inline const QString DEFAULT_TIME_CONTROL = QStringLiteral("turn60");
     // After SIGTERM, running games get this long to finish (--shutdown-grace)

@@ -17,6 +17,8 @@ This document covers what every game shares. Each game documents its own fields 
 - Unrecognised lines, including numbers that are too long, get `wrongcmd:`.
 - A line is at most 4096 bytes. A client that sends more without a newline is disconnected.
 - A connection must log in with a valid `mbclient:` within 10 s or it is closed. An invalid line before that only gets `wrongcmd:`. After a login error, the rest of the same packet is ignored.
+- Per IP address: at most 32 connections waiting to log in (more are refused), and 100 login attempts at once, then one per 2 s (above that the connection is closed without a reply).
+- A client that stops reading while more than 64 KB of output is queued for it is disconnected.
 
 ## Game model
 

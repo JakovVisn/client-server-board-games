@@ -27,6 +27,8 @@ public:
 
     [[nodiscard]] QTcpSocket* socket() const;
     void send(const QString& cmd);
+    // The peer stopped reading; the server disconnects it on its next tick
+    [[nodiscard]] bool writeOverflowed() const { return writeOverflowed_; }
     // Flushes and closes the connection; lines still buffered from the peer are dropped
     void closeConnection();
 
@@ -104,6 +106,7 @@ private:
     bool pingPending_ = false;
     bool matching_ = true;
     bool closing_ = false;
+    bool writeOverflowed_ = false;
     QElapsedTimer connectedAt_;
     QElapsedTimer postGameHold_;
     GameSession* session_ = nullptr;

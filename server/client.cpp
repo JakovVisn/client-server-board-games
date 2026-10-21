@@ -16,7 +16,14 @@ QTcpSocket* Client::socket() const { return socket_; }
 
 void Client::send(const QString& cmd)
 {
-    if (socket_->state() != QAbstractSocket::ConnectedState) return;
+    if (writeOverflowed_ || socket_->state() != QAbstractSocket::ConnectedState) return;
+    if (socket_->bytesToWrite() > ServerConfig::MAX_PENDING_WRITE_BYTES) {
+        Log::warn(QString("write_overflow login=%1 bytes=%2")
+                      .arg(Log::quoted(login_)).arg(socket_->bytesToWrite()));
+        writeOverflowed_ = true;
+        closing_ = true;  // stop reading its lines too
+        return;
+    }
     Log::debug(QString("send login=%1 line=%2").arg(Log::quoted(login_), cmd));
     socket_->write((cmd + '\n').toUtf8());
 }

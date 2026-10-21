@@ -9,8 +9,11 @@
 #include "virus_war_game.h"
 
 Server::Server(const QString& authFile, const QString& statsFile, QObject* parent)
-    : QTcpServer(parent), authManager_(authFile, statsFile)
+    : QTcpServer(parent)
+    , authManager_(authFile, statsFile)
+    , loginLimiter_(ServerConfig::LOGIN_BURST, ServerConfig::LOGIN_REFILL_MS)
 {
+    uptime_.start();
     gamePrototypes_[ServerConfig::DEFAULT_GAME_NAME] = std::make_unique<VirusWarGame>();
 }
 
@@ -58,6 +61,13 @@ int Server::runningGames() const
         [](const std::unique_ptr<GameSession>& s) { return !s->isFinished(); }));
 }
 
+int Server::pendingLogins(const QHostAddress& peer) const
+{
+    return static_cast<int>(std::count_if(clients_.begin(), clients_.end(), [&peer](const Client* c) {
+        return c->status() == Client::Status::Unauthenticated && c->socket()->peerAddress() == peer;
+    }));
+}
+
 bool Server::inGame(const Client* client) const
 {
     return std::any_of(sessions_.begin(), sessions_.end(), [client](const auto& s) {
@@ -70,6 +80,13 @@ void Server::incomingConnection(qintptr socketDescriptor)
     auto* socket = new QTcpSocket(this);
     if (!socket->setSocketDescriptor(socketDescriptor)) {
         Log::warn("connection_failed reason=socket_descriptor");
+        socket->deleteLater();
+        return;
+    }
+    if (pendingLogins(socket->peerAddress()) >= ServerConfig::MAX_PENDING_LOGINS_PER_IP) {
+        Log::warn(QString("connection_refused peer=%1 reason=too_many_pending")
+                      .arg(socket->peerAddress().toString()));
+        socket->abort();
         socket->deleteLater();
         return;
     }
@@ -160,6 +177,13 @@ bool Server::stateAuthorize(const QString& cmd, Client* client)
     if (!checkProtocolVersion(version)) {
         Log::info(QString("login_failed login=%1 reason=wrongver").arg(login));
         client->send("wrongver:");
+        client->closeConnection();
+        return true;
+    }
+
+    const QString peer = client->socket()->peerAddress().toString();
+    if (!loginLimiter_.allow(peer, uptime_.elapsed())) {
+        Log::warn(QString("login_failed login=%1 peer=%2 reason=rate_limited").arg(login, peer));
         client->closeConnection();
         return true;
     }
@@ -441,6 +465,13 @@ void Server::timerEvent(QTimerEvent* event)
             continue;
         }
 
+        if (client->writeOverflowed()) {
+            Log::info(QString("disconnect login=%1 reason=write_overflow").arg(Log::quoted(client->login())));
+            disconnectClient(client);
+            ++it;
+            continue;
+        }
+
         if (client->status() == Client::Status::Unauthenticated) {
             if (client->millisecondsSinceConnect() >= ServerConfig::LOGIN_TIMEOUT_MS) {
                 const QTcpSocket* socket = client->socket();
@@ -467,6 +498,7 @@ void Server::timerEvent(QTimerEvent* event)
         ++it;
     }
 
+    loginLimiter_.prune(uptime_.elapsed());
     if (state_ == State::Draining)
         continueShutdown();
     matchClients();

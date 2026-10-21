@@ -4,12 +4,14 @@
 #include <map>
 #include <memory>
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QMap>
 #include <QTcpServer>
 #include "abstract_game.h"
 #include "auth_manager.h"
 #include "client.h"
 #include "game_session.h"
+#include "rate_limiter.h"
 
 class Server : public QTcpServer
 {
@@ -41,6 +43,8 @@ private:
     enum class State { Running, Draining, Stopped };
     State state_ = State::Running;
     QDeadlineTimer drainDeadline_;
+    QElapsedTimer uptime_;
+    RateLimiter loginLimiter_;
 
     void parseData(const QString& cmd, Client* client);
     [[nodiscard]] bool stateAuthorize(const QString& cmd, Client* client);
@@ -58,6 +62,7 @@ private:
     void matchClients();
     [[nodiscard]] int runningGames() const;
     [[nodiscard]] bool inGame(const Client* client) const;
+    [[nodiscard]] int pendingLogins(const QHostAddress& peer) const;
     void continueShutdown();
     // Starts a game between a and b; autoBot is the league bot of a pass-3 auto-match
     void startSession(Client* a, Client* b, Client* autoBot = nullptr);

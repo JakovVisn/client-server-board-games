@@ -1,8 +1,9 @@
 // Unit tests for the server's parts that need no sockets: Virus War rules, time controls,
-// matchmaking and account storage.
+// matchmaking, login rate limiting and account storage.
 #include <QTest>
 #include "auth_manager.h"
 #include "matchmaking.h"
+#include "rate_limiter.h"
 #include "time_control.h"
 #include "virus_war_game.h"
 
@@ -292,6 +293,41 @@ private slots:
         QCOMPARE(p.size(), size_t(2));
         QCOMPARE(p[1].a, 2);
         QVERIFY(p[1].autoMatch);
+    }
+
+    // ── Login rate limiting ───────────────────────────────────────────────
+
+    void burstThenOneAttemptPerInterval()
+    {
+        RateLimiter limiter(3, 1000);
+        for (int i = 0; i < 3; ++i)
+            QVERIFY(limiter.allow("1.2.3.4", 0));
+        QVERIFY(!limiter.allow("1.2.3.4", 999));
+        QVERIFY(limiter.allow("5.6.7.8", 999));  // other addresses have their own bucket
+        QVERIFY(limiter.allow("1.2.3.4", 1000));
+        QVERIFY(!limiter.allow("1.2.3.4", 1500));
+        QVERIFY(limiter.allow("1.2.3.4", 2000));  // the half token earned at 1500 is kept
+    }
+
+    void bucketRefillsUpToTheBurst()
+    {
+        RateLimiter limiter(3, 1000);
+        QVERIFY(limiter.allow("1.2.3.4", 0));
+        for (int i = 0; i < 3; ++i)
+            QVERIFY(limiter.allow("1.2.3.4", 60000));
+        QVERIFY(!limiter.allow("1.2.3.4", 60000));
+    }
+
+    void fullBucketsArePruned()
+    {
+        RateLimiter limiter(3, 1000);
+        QVERIFY(limiter.allow("1.2.3.4", 0));
+        QVERIFY(limiter.allow("5.6.7.8", 0));
+        QVERIFY(limiter.allow("5.6.7.8", 0));
+        limiter.prune(1000);
+        QCOMPARE(limiter.size(), 1);  // 5.6.7.8 still owes a token
+        limiter.prune(2000);
+        QCOMPARE(limiter.size(), 0);
     }
 
     // ── Accounts ──────────────────────────────────────────────────────────

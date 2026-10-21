@@ -24,6 +24,7 @@ add_library(GameServerLib STATIC
     client.h client.cpp
     game_session.h game_session.cpp
     matchmaking.h matchmaking.cpp
+    rate_limiter.h rate_limiter.cpp
     server_constants.h
     server.h server.cpp
     time_control.h time_control.cpp

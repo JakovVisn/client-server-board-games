@@ -3,6 +3,7 @@
 #include <QSignalSpy>
 #include <QTest>
 #include "server.h"
+#include "server_constants.h"
 
 namespace {
 
@@ -162,6 +163,22 @@ private slots:
         second.send(login("bot1"));
         QCOMPARE(second.nextLine(), QString("alreadyconnected:"));
         QVERIFY(first.servedByServer());
+    }
+
+    void pendingLoginsPerAddressAreCapped()
+    {
+        std::vector<std::unique_ptr<Peer>> pending;
+        for (int i = 0; i < ServerConfig::MAX_PENDING_LOGINS_PER_IP; ++i)
+            pending.push_back(std::make_unique<Peer>(port()));
+        QVERIFY(pending.back()->servedByServer());
+
+        Peer oneTooMany(port());
+        QVERIFY(oneTooMany.waitForDisconnect());
+
+        pending.front()->send(login("alice"));
+        QVERIFY(!pending.front()->lineStartingWith("mbserver:").isEmpty());
+        Peer afterLogin(port());  // a logged-in connection no longer counts
+        QVERIFY(afterLogin.servedByServer());
     }
 
     void shutdownClosesIdleClientsAndStopsListening()
