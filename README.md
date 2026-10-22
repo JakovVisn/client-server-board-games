@@ -82,8 +82,8 @@ The venv installs pybind11. Once `viruswar/.venv` exists, CMake builds `viruswar
 ### Tests
 
 ```bash
-(cd build && ctest --output-on-failure)            # C++: game rules, time controls, matchmaking, client protocol and clock
+(cd build && ctest --output-on-failure)            # C++: game rules, time controls, matchmaking, accounts, limits, a real server over sockets, client
 cd viruswar && .venv/bin/python -m pytest tests   # Python: log format, server connection, AZ bot internals
 ```
 
-The Python tests need the built `viruswar_sim`. None of the tests start a server or a bot. GitHub Actions runs both suites on every push (`.github/workflows/ci.yml`).
+The Python tests need the built `viruswar_sim`. The C++ network tests start their own server on a free local port; no test needs a running server or bot. GitHub Actions runs both suites on every push (`.github/workflows/ci.yml`).
