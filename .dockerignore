@@ -1,0 +1,12 @@
+.git
+.idea
+*build-*
+build
+CLAUDE.md
+deploy
+**/.env
+**/.venv
+**/__pycache__
+**/*.so
+**/models
+**/models_run*

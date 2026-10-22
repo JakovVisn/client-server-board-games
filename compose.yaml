@@ -1,0 +1,17 @@
+services:
+  server:
+    build: { context: ., target: server }
+    image: viruswar-server
+    ports: ["1234:1234"]
+    volumes: ["./deploy/data:/data"]
+    stop_grace_period: 330s  # above the server's --shutdown-grace (300 s)
+    restart: unless-stopped
+
+  azbot:
+    build: { context: ., target: azbot }
+    image: viruswar-azbot
+    command: ["--host", "server", "--bot", "azbot:${AZBOT_PASSWORD:?set AZBOT_PASSWORD in .env}:latest"]
+    volumes: ["${AZBOT_MODELS:-./viruswar/az-bot/models/promoted}:/models:ro"]
+    depends_on: [server]
+    stop_grace_period: 330s  # finishes its running games after SIGTERM
+    restart: unless-stopped

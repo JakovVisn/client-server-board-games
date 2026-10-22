@@ -65,3 +65,6 @@ compile_commands.json
 __pycache__/
 *.pyc
 .venv/
+
+# Docker: live accounts and stats
+deploy/data/
