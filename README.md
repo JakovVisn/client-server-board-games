@@ -64,7 +64,7 @@ The Connect dialog also sets the board size. A game allows 60 s per turn; tick *
 Bots accept any time control. The random bot plays any board size, the AZ bot only 10×10.
 
 - Random bot, told to look for you: `./VirusWarRandomBot --login randombot --password <any> --preferred <your login>`
-- Strong opponent: run the AZ bot's `play.py`, see [viruswar/az-bot/README.md](viruswar/az-bot/README.md).
+- Strong opponent: the AZ bot with its trained model, see [Play against the AZ bot](#play-against-the-az-bot).
 
 ### Python bots
 
@@ -78,6 +78,35 @@ ln -s ../../build/server/viruswar_sim.*.so az-bot/    # the same for rl-bot/
 ```
 
 The venv installs pybind11. Once `viruswar/.venv` exists, CMake builds `viruswar_sim` for the venv's Python with the venv's pybind11, so configure and build again (`cmake -B build && cmake --build build`). Without pybind11, CMake prints a warning and skips the module.
+
+### Play against the AZ bot
+
+The trained model ([results](viruswar/az-bot/README.md)) is published as the release [`az-model-21400`](https://github.com/JakovVisn/client-server-board-games/releases/tag/az-model-21400). Download it and compare its SHA-256 with the one shown next to the file on the release page:
+
+```bash
+mkdir -p viruswar/az-bot/models/promoted
+curl -fL -o viruswar/az-bot/models/promoted/promoted_0000021400.pt \
+  https://github.com/JakovVisn/client-server-board-games/releases/download/az-model-21400/promoted_0000021400.pt
+shasum -a 256 viruswar/az-bot/models/promoted/promoted_0000021400.pt
+```
+
+The bot's account needs a line `azbot:<password>:bot:3` in the server's `auth.txt`; pick a password of 3–20 letters, digits or `_`.
+
+**With Docker**, the server and the bot run together (`compose.yaml`):
+
+```bash
+echo "AZBOT_PASSWORD=<password>" > .env
+mkdir -p deploy/data && echo "azbot:<password>:bot:3" > deploy/data/auth.txt
+docker compose up --build
+```
+
+**Without Docker**, add the line to `build/server/auth.txt`, start `GameServer`, then the bot from the [Python venv](#python-bots):
+
+```bash
+cd viruswar/az-bot && ../.venv/bin/python play.py --bot azbot:<password>:latest
+```
+
+Then connect the client to `127.0.0.1:1234` with the default 10×10 board: the server pairs you with the bot.
 
 ### Tests
 
