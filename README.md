@@ -32,7 +32,7 @@ Exact rules, board encoding and a full example game: [viruswar/PROTOCOL.md](viru
 
 ## Getting started
 
-You need CMake 3.16+, a C++17 compiler and Qt 6 (Core, Network, Gui, Widgets). The Python bots also need Python 3.
+You need CMake 3.16+, a C++17 compiler and Qt 6.8 or newer (Core, Network, Gui, Widgets). The Python bots also need Python 3.
 
 ```bash
 cmake -B build
